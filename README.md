@@ -1,4 +1,4 @@
-# Palworld Discord Bot (discord.js) – Safe Start/Stop Control + Auto-Monitor
+# Palworld Discord Bot (discord.js) – Private Server Start/Stop Control + Auto-Stop
 
 ## Overview
 This is NOT a public bot; it's the code for a private bot you'll create for yourself to run on your own PC to manage your Palworld server. This bot allows a trusted Discord role to **start** or **gracefully stop** a Steam-based Palworld dedicated server via Palworld's REST API. You'll want this to run on Windows startup in most cases, but I didn't cover that in the scope of this project. If you end up using my bot, that will be the easy part for you.
@@ -12,6 +12,7 @@ This is NOT a public bot; it's the code for a private bot you'll create for your
 - `/palstop` – Save world → re-check players → graceful shutdown (only if players == 0)
 - `/palhelp` – Show all available commands
 - **Auto-monitor** – Background monitoring stops server after 2 consecutive empty checks
+- **Discord Status Integration** – Bot's Discord presence shows real-time server status
 
 ---
 
@@ -52,9 +53,15 @@ The `.env.example` file contains comprehensive documentation for all settings in
 
 ### 4. Install & Deploy
 ```bash
+# Using npm
 npm install
 npm run deploy-commands
 npm run dev
+
+# OR using yarn  
+yarn install
+yarn deploy-commands
+yarn dev
 ```
 
 ---
@@ -80,36 +87,56 @@ npm run dev
 5. If still 0 players → graceful shutdown with 2-second delay
 
 ### Auto-Monitor Background Process
-1. Runs automatically every 10 minutes (configurable)
+1. Runs automatically every 10 minutes (configurable, minimum 1 minute)
 2. Checks server status and player count
-3. Tracks consecutive empty server checks
-4. After 2 consecutive empty checks (20 minutes total) → triggers graceful shutdown
-5. Uses same shutdown logic as manual `/palstop`
+3. Updates Discord bot status in real-time ("ServerName is UP/DOWN")
+4. Tracks consecutive empty server checks
+5. After 2 consecutive empty checks (configurable) → triggers graceful shutdown
 6. Respects concurrent operation locks to prevent conflicts
+7. Automatically pauses monitoring when server is known to be down
 
 ---
 
 ## Security Notes
-- **Never** expose Palworld REST API to the public internet.
-- Keep REST bound to localhost and use bot as the only interface for friends.
-- Only forward **game ports** (8211/UDP, often 27015/UDP) for player connections.
+This bot implements some security measures:
+
+- **API Security**: Never expose Palworld REST API to the public internet
+- **Network Security**: Keep REST bound to localhost and use bot as the only interface
+- **Port Security**: Only forward game ports (8211/UDP, often 27015/UDP) for player connections
+- **Input Sanitization**: All user inputs and API responses are sanitized to prevent injection attacks
+- **Error Handling**: Sensitive information is filtered from error messages
+- **Role-Based Access**: All commands require the `palserver` role for authorization
+- **Process Security**: Server commands use parameterized execution to prevent shell injection
 
 ---
 
 ## Files
-- `deploy-commands.js` – Registers slash commands
+
+### Core Files
+- `deploy-commands.js` – Registers slash commands with Discord
 - `src/index.js` – Discord bot main file with command handlers
-- `src/palworld.js` – Palworld REST API helpers
-- `src/process.js` – Start server helpers (executable or Windows service)
-- `src/monitor.js` – Background monitoring and auto-stop functionality
-- `.env.example` – Template environment file
+- `src/palworld.js` – Palworld REST API client
+- `src/process.js` – Server management (executable/Windows service)
+- `src/monitor.js` – Background monitoring and Discord status updates
+
+### Configuration & Security
+- `src/config/index.js` – Centralized configuration management with validation
+- `src/middleware/auth.js` – Role-based authorization middleware
+- `src/error-handler.js` – Centralized error handling with sanitization
+- `src/utils/security.js` – Input sanitization and security utilities
+- `src/utils/logger.js` – Structured logging system
+
+### Environment & Documentation
+- `.env.example` – Template environment file with comprehensive documentation
 - `README.md` – This file
 
-## Auto-Monitor Configuration
-The background monitor can be configured via environment variables:
+## Configuration Details
 
+### Auto-Monitor Settings
 - **`MONITOR_INTERVAL_MS`** (default: 600000 = 10 minutes)  
-  How often to check server status
+  How often to check server status. **Minimum: 60000ms (1 minute)** to prevent API rate limiting.
 
 - **`EMPTY_CHECK_THRESHOLD`** (default: 2)  
-  Number of consecutive empty checks before auto-stop
+  Number of consecutive empty checks before auto-stop. With 10-minute intervals = 20 minutes total.
+
+**Note**: Configuration includes built-in validation with minimum/maximum values to ensure system stability and security.
