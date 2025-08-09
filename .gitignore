@@ -1,0 +1,151 @@
+# =============================================================================
+# NODE.JS & NPM/YARN
+# =============================================================================
+
+# Dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+
+# Runtime files
+*.pid
+*.seed
+*.pid.lock
+
+# Coverage directory used by tools like istanbul
+coverage/
+*.lcov
+
+# nyc test coverage
+.nyc_output
+
+# =============================================================================
+# ENVIRONMENT & SECRETS
+# =============================================================================
+
+# Environment variables (CRITICAL - contains passwords, tokens, API keys)
+.env
+.env*
+
+# Configuration files that might contain secrets
+config.json
+secrets.json
+*.key
+*.pem
+*.p12
+*.pfx
+
+# =============================================================================
+# LOGS & TEMPORARY FILES
+# =============================================================================
+
+# Log files
+*.log
+logs/
+*.log.*
+
+# Temporary folders
+tmp/
+temp/
+.tmp/
+
+# =============================================================================
+# EDITOR & IDE FILES
+# =============================================================================
+
+# Visual Studio Code
+.vscode/
+*.code-workspace
+
+# WebStorm/IntelliJ
+.idea/
+*.iml
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Vim
+*.swp
+*.swo
+*~
+
+# Emacs
+.#*
+\#*#
+
+# =============================================================================
+# OPERATING SYSTEM FILES
+# =============================================================================
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+*.stackdump
+[Dd]esktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msix
+*.msm
+*.msp
+*.lnk
+
+# macOS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Icon?
+
+# Linux
+*~
+.directory
+.Trash-*
+
+# =============================================================================
+# PROJECT-SPECIFIC
+# =============================================================================
+
+# Claude stuff
+.claude/
+claude-logs/
+CLAUDE.md
+
+# Build outputs
+dist/
+build/
+
+# Database files (if any)
+*.db
+*.sqlite
+*.sqlite3
+
+# Backup files
+*.bak
+*.backup
+
+# =============================================================================
+# SECURITY-SENSITIVE FILES
+# =============================================================================
+
+# Any file containing tokens, passwords, or API keys
+*token*
+*password*
+*secret*
+*key*
+*credentials*
+
+# Except allow these specific files (they're examples/templates)
+!.env.example
+!package*.json
+!yarn.lock
+
+# Bot-specific sensitive files
+discord-token.txt
+palworld-password.txt
