@@ -39,6 +39,9 @@ const commands = [
     .setName('palstop')
     .setDescription('Gracefully stop (only when 0 players)'),
   new SlashCommandBuilder()
+    .setName('palbounce')
+    .setDescription('Graceful stop, then restart the server'),
+  new SlashCommandBuilder()
     .setName('palhelp')
     .setDescription('Show all available Palworld commands'),
 ].map(c => c.toJSON());

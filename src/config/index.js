@@ -122,6 +122,14 @@ const config = {
       process.env.SHUTDOWN_DELAY_SECONDS || '2',
       0,     // Minimum 0 seconds (immediate)
       30     // Maximum 30 seconds
+    ),
+
+    // Delay between graceful stop and restart during a bounce, in milliseconds (default: 15 seconds)
+    bounceDelayMs: validatePositiveInteger(
+      'BOUNCE_DELAY_MS',
+      process.env.BOUNCE_DELAY_MS || '15000',
+      1000,   // Minimum 1 second
+      120000  // Maximum 2 minutes
     )
   },
 
@@ -142,21 +150,6 @@ const config = {
       1,  // Minimum 1 check
       10  // Maximum 10 checks
     )
-  },
-
-  // Logging Configuration
-  logging: {
-    // Log level: ERROR, WARN, INFO, DEBUG (default: INFO)
-    level: (process.env.LOG_LEVEL || 'INFO').toUpperCase(),
-    
-    // Enable performance logging (default: false in production)
-    enablePerformanceLogging: process.env.NODE_ENV !== 'production'
-  },
-
-  // Display Configuration
-  display: {
-    // Character limit for JSON display in Discord embeds
-    jsonDisplayLimit: 800
   }
 };
 

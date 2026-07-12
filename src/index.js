@@ -4,7 +4,8 @@ import { getInfo, getPlayers, getMetrics, saveWorld, shutdown, isUp } from './pa
 import { startServer } from './process.js';
 import { startMonitoring, setServerUp, setServerDown } from './monitor.js';
 import { sanitizeErrorMessage } from './utils/security.js';
-import { createLogger, createPerformanceLogger } from './utils/logger.js';
+import { createLogger } from './utils/logger.js';
+import { sleep, waitFor } from './utils/async.js';
 import { checkAuthorization } from './middleware/auth.js';
 import config from './config/index.js';
 
@@ -160,6 +161,48 @@ client.on('interactionCreate', async (interaction) => {
           return interaction.editReply(result.message);
         }).catch(err => interaction.editReply(sanitizeErrorMessage(err)));
       }
+
+      case 'palbounce': {
+        // Authorization check - only users with 'palserver' role can start/stop server
+        if (!checkAuthorization(interaction)) return;
+        await interaction.deferReply();
+
+        // Run the entire stop+wait+start sequence under a single lock so the monitor
+        // and other commands cannot interleave mid-bounce and leave the server in a
+        // half-restarted state
+        return withLock(async () => {
+          // Reuse the graceful stop path - it handles the "players online" and
+          // "already down" cases and returns a structured result
+          const stopResult = await gracefulShutdown();
+          if (!stopResult.success) {
+            // Do not start the server if the stop did not succeed
+            return interaction.editReply(`Bounce aborted — ${stopResult.message}`);
+          }
+
+          // Stop succeeded - let the user know and wait before restarting
+          await interaction.editReply(`Server stopped. Restarting in ${Math.round(config.timing.bounceDelayMs / 1000)}s...`);
+          await sleep(config.timing.bounceDelayMs);
+
+          try {
+            await startServer();
+
+            // Notify monitor that server is now up
+            await setServerUp();
+
+            // Check if API is responding and show status if available
+            try {
+              const embed = await createServerStatusEmbed('Server Restarted');
+              return interaction.editReply({ content: 'Server bounced successfully!', embeds: [embed] });
+            } catch {
+              // API not responding yet, fall back to simple message
+              return interaction.editReply('Bounce complete. Server should be up shortly.');
+            }
+          } catch (e) {
+            // Stop already completed, so surface the restart failure specifically
+            return interaction.editReply(`Restart failed after stop: \`${sanitizeErrorMessage(e)}\``);
+          }
+        }).catch(err => interaction.editReply(sanitizeErrorMessage(err)));
+      }
       case 'palhelp': {
         // Authorization check - only users with 'palserver' role can use any commands
         if (!checkAuthorization(interaction)) return;
@@ -171,6 +214,7 @@ client.on('interactionCreate', async (interaction) => {
             { name: '/palplayers', value: 'List current players', inline: false },
             { name: '/palstart', value: 'Start the Palworld server', inline: false },
             { name: '/palstop', value: 'Gracefully stop server when 0 players', inline: false },
+            { name: '/palbounce', value: 'Graceful stop, wait, then restart the server', inline: false },
           )
           .setColor('#808080');
         return interaction.reply({ embeds: [embed] });
@@ -192,18 +236,6 @@ client.on('interactionCreate', async (interaction) => {
     }
   }
 });
-
-/**
- * Safely converts objects to JSON strings with fallback to string conversion
- * Prevents crashes when trying to display non-serializable objects
- */
-function safeStringify(x) { 
-  try { 
-    return JSON.stringify(x, null, 2); 
-  } catch { 
-    return String(x); 
-  } 
-}
 
 /**
  * Executes graceful server shutdown with player checks and world save
@@ -241,7 +273,7 @@ async function gracefulShutdown() {
     await shutdown(config.timing.shutdownDelaySeconds, 'Stopping (admin request).');
     
     // Wait for server to actually go down before confirming
-    const serverDown = await waitForShutdown(config.timing.startTimeoutMs, config.timing.pollIntervalMs);
+    const serverDown = await waitFor(async () => !(await isUp()), config.timing.startTimeoutMs, config.timing.pollIntervalMs);
     if (!serverDown) {
       return { success: false, message: 'Server shutdown timed out - may still be running.' };
     }
@@ -255,29 +287,6 @@ async function gracefulShutdown() {
     const sanitizedMessage = sanitizeErrorMessage(e);
     return { success: false, message: `Stop failed: \`${sanitizedMessage}\`` };
   }
-}
-
-/**
- * Promise-based sleep utility for adding delays
- * Used in shutdown sequence to allow proper timing between operations
- */
-const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-
-/**
- * Waits for server to shut down by polling isUp() until it returns false
- * @param {number} timeoutMs - Maximum time to wait in milliseconds
- * @param {number} intervalMs - Polling interval in milliseconds
- * @returns {Promise<boolean>} true if server went down, false if timeout
- */
-async function waitForShutdown(timeoutMs, intervalMs) {
-  const until = Date.now() + timeoutMs;
-  while (Date.now() < until) {
-    try {
-      if (!(await isUp())) return true; // Server is down
-    } catch {}
-    await sleep(intervalMs);
-  }
-  return false; // Timeout
 }
 
 client.login(config.discord.token);
