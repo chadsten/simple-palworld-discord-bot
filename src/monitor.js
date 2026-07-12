@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import { isUp, getPlayers, getInfo } from './palworld.js';
 import { sanitizeErrorMessage } from './utils/security.js';
-import { createLogger, createPerformanceLogger } from './utils/logger.js';
+import { createLogger } from './utils/logger.js';
 import config from './config/index.js';
 import { ActivityType } from 'discord.js';
 
@@ -86,45 +86,22 @@ export async function startMonitoring(gracefulShutdownFn, withLockFn, client = n
 }
 
 /**
- * Stops the background monitoring system
- */
-export function stopMonitoring() {
-  if (!monitoringActive) {
-    logger.info('Not active, skipping stop');
-    return;
-  }
-  
-  logger.info('Stopping monitoring');
-  monitoringActive = false;
-  consecutiveEmptyChecks = 0;
-  
-  if (intervalId) {
-    clearInterval(intervalId);
-    intervalId = null;
-  }
-}
-
-/**
  * Performs a single monitoring check
  * @param {Function} gracefulShutdownFn - Function to call for graceful shutdown
  * @param {Function} withLockFn - Lock mechanism to prevent concurrent operations
  */
 async function performMonitorCheck(gracefulShutdownFn, withLockFn) {
-  const perfLogger = createPerformanceLogger('Monitor', 'check');
-  
   logger.debug('Starting monitor check');
-  
+
   // Skip monitoring entirely when we know server is down
   if (serverState === SERVER_STATE.KNOWN_DOWN) {
     logger.debug('Server state is KNOWN_DOWN, skipping monitoring check');
-    perfLogger.end({ skipped: true, serverState });
     return;
   }
-  
+
   try {
     // Check if server is up
     logger.debug('Checking server status');
-    perfLogger.checkpoint('server-status-check');
     const serverUp = await isUp();
     
     if (!serverUp) {
@@ -142,22 +119,14 @@ async function performMonitorCheck(gracefulShutdownFn, withLockFn) {
       logger.info('Server is UP, updating state to KNOWN_UP');
       await handleServerUp();
     }
-    perfLogger.checkpoint('player-count-check');
     // Server is up, check player count
     const players = await getPlayers();
     const playerCount = players.length;
-    
-    const checkData = {
-      playerCount,
-      consecutiveEmptyChecks,
-      threshold: config.monitoring.emptyCheckThreshold
-    };
-    
+
     if (playerCount === 0) {
       // No players online
       consecutiveEmptyChecks++;
-      checkData.consecutiveEmptyChecks = consecutiveEmptyChecks;
-      
+
       logger.info(`Empty server check ${consecutiveEmptyChecks}/${config.monitoring.emptyCheckThreshold}`);
       
       if (consecutiveEmptyChecks >= config.monitoring.emptyCheckThreshold) {
@@ -197,8 +166,7 @@ async function performMonitorCheck(gracefulShutdownFn, withLockFn) {
     logger.error('Error during monitoring check', { error: sanitizedMessage });
     // Don't reset counter on errors, just log and continue
   }
-  
-  perfLogger.end({ consecutiveEmptyChecks });
+
   logger.debug('Monitor check completed');
 }
 
@@ -263,19 +231,4 @@ async function updateDiscordStatus() {
     const sanitizedMessage = sanitizeErrorMessage(error);
     logger.error('Failed to update Discord status', { error: sanitizedMessage });
   }
-}
-
-/**
- * Gets current monitoring status for debugging
- * @returns {Object} Current monitoring state
- */
-export function getMonitorStatus() {
-  return {
-    active: monitoringActive,
-    serverState,
-    intervalMs: config.monitoring.intervalMs,
-    emptyCheckThreshold: config.monitoring.emptyCheckThreshold,
-    consecutiveEmptyChecks,
-    nextCheckIn: intervalId ? Math.ceil(config.monitoring.intervalMs / 1000) : null
-  };
 }

@@ -1,7 +1,8 @@
 import 'dotenv/config';
 import { spawn } from 'node:child_process';
 import { isUp } from './palworld.js';
-import { validateServiceName, validateStartCommand, sanitizeErrorMessage, getSecureEnvVar } from './utils/security.js';
+import { validateServiceName, validateStartCommand, sanitizeErrorMessage } from './utils/security.js';
+import { waitFor } from './utils/async.js';
 import config from './config/index.js';
 
 export async function startServer() {
@@ -137,15 +138,4 @@ async function runSecureDetached(executable, args = [], cwd) {
       reject(new Error(sanitizedError));
     }
   });
-}
-
-async function waitFor(fn, timeoutMs, intervalMs) {
-  const until = Date.now() + timeoutMs;
-  while (Date.now() < until) {
-    try {
-      if (await fn()) return true;
-    } catch {}
-    await new Promise(r => setTimeout(r, intervalMs));
-  }
-  return false;
 }

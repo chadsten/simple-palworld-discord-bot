@@ -26,20 +26,3 @@ export function checkAuthorization(interaction) {
   }
   return true;
 }
-
-/**
- * Authorization middleware wrapper for command handlers
- * Automatically checks authorization before executing the handler
- * @param {Function} handler - The command handler function to wrap
- * @returns {Function} Wrapped handler with authorization checking
- */
-export function requirePalserverRole(handler) {
-  return async (interaction) => {
-    if (!checkAuthorization(interaction)) {
-      return; // Authorization failed, error already sent
-    }
-    
-    // User is authorized, proceed with original handler
-    return handler(interaction);
-  };
-}

@@ -242,37 +242,3 @@ export function sanitizeErrorMessage(error, includeType = false) {
   
   return message;
 }
-
-/**
- * Creates a secure wrapper for environment variable access
- * Validates and sanitizes environment variables before use
- * @param {string} varName - Environment variable name
- * @param {Function} validator - Validation function for the value
- * @param {*} defaultValue - Default value if variable is not set
- * @returns {*} Validated environment variable value or default
- * @throws {Error} If validation fails
- */
-export function getSecureEnvVar(varName, validator, defaultValue = undefined) {
-  if (typeof varName !== 'string' || !/^[A-Z][A-Z0-9_]*$/.test(varName)) {
-    throw new Error('Invalid environment variable name');
-  }
-  
-  const value = process.env[varName];
-  
-  if (value === undefined || value === '') {
-    if (defaultValue !== undefined) {
-      return defaultValue;
-    }
-    throw new Error(`Required environment variable ${varName} is not set`);
-  }
-  
-  if (typeof validator === 'function') {
-    try {
-      validator(value);
-    } catch (error) {
-      throw new Error(`Environment variable ${varName} validation failed: ${sanitizeErrorMessage(error)}`);
-    }
-  }
-  
-  return value;
-}

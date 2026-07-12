@@ -9,7 +9,7 @@
 /**
  * Log levels in order of priority
  */
-export const LOG_LEVELS = {
+const LOG_LEVELS = {
   ERROR: 0,
   WARN: 1,
   INFO: 2,
@@ -79,95 +79,3 @@ export function createLogger(component) {
  * Global logger instance
  */
 export const logger = createLogger('Global');
-
-/**
- * Performance logging utilities
- */
-export class PerformanceLogger {
-  constructor(component, operation) {
-    this.component = component;
-    this.operation = operation;
-    this.startTime = process.hrtime.bigint();
-    this.logger = createLogger(component);
-  }
-  
-  /**
-   * End performance measurement and log result
-   * @param {Object} metadata - Additional metadata
-   */
-  end(metadata = {}) {
-    const endTime = process.hrtime.bigint();
-    const durationMs = Number(endTime - this.startTime) / 1000000; // Convert nanoseconds to milliseconds
-    
-    this.logger.debug(`${this.operation} completed`, {
-      durationMs: durationMs.toFixed(2),
-      ...metadata
-    });
-    
-    return durationMs;
-  }
-  
-  /**
-   * Add checkpoint measurement
-   * @param {string} checkpoint - Checkpoint name
-   * @param {Object} metadata - Additional metadata
-   */
-  checkpoint(checkpoint, metadata = {}) {
-    const checkpointTime = process.hrtime.bigint();
-    const durationMs = Number(checkpointTime - this.startTime) / 1000000;
-    
-    this.logger.debug(`${this.operation} - ${checkpoint}`, {
-      checkpointMs: durationMs.toFixed(2),
-      ...metadata
-    });
-    
-    return durationMs;
-  }
-}
-
-/**
- * Create performance logger for timing operations
- * @param {string} component - Component name
- * @param {string} operation - Operation description
- * @returns {PerformanceLogger} Performance logger instance
- */
-export function createPerformanceLogger(component, operation) {
-  return new PerformanceLogger(component, operation);
-}
-
-/**
- * Quick performance timing utility
- * @param {string} component - Component name
- * @param {string} operation - Operation description
- * @param {Function} fn - Function to time
- * @returns {Promise<*>} Function result
- */
-export async function timeOperation(component, operation, fn) {
-  const perfLogger = createPerformanceLogger(component, operation);
-  try {
-    const result = await fn();
-    perfLogger.end({ success: true });
-    return result;
-  } catch (error) {
-    perfLogger.end({ success: false, error: error.message });
-    throw error;
-  }
-}
-
-/**
- * Get current log level information
- * @returns {Object} Current logging configuration
- */
-export function getLogConfig() {
-  return {
-    currentLevel: LEVEL_NAMES[CURRENT_LEVEL],
-    currentLevelValue: CURRENT_LEVEL,
-    environmentVariable: process.env.LOG_LEVEL || 'not set (using INFO)',
-    availableLevels: LEVEL_NAMES
-  };
-}
-
-export function logStartupInfo() {
-  const config = getLogConfig();
-  logger.info(`Logger initialized: ${config.currentLevel} level`);
-}
