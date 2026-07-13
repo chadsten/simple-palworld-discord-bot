@@ -17,34 +17,8 @@
  * Usage: node deploy-commands.js
  */
 import 'dotenv/config';
-import { REST, Routes, SlashCommandBuilder } from 'discord.js';
-
-/**
- * Palworld Bot Command Definitions
- * 
- * Each command is built using Discord.js SlashCommandBuilder and converted to JSON
- * for API registration. Commands are designed for role-based access control.
- */
-const commands = [
-  new SlashCommandBuilder()
-    .setName('palstatus')
-    .setDescription('Show server status and players'),
-  new SlashCommandBuilder()
-    .setName('palplayers')
-    .setDescription('List current players'),
-  new SlashCommandBuilder()
-    .setName('palstart')
-    .setDescription('Start the Palworld server'),
-  new SlashCommandBuilder()
-    .setName('palstop')
-    .setDescription('Gracefully stop (only when 0 players)'),
-  new SlashCommandBuilder()
-    .setName('palbounce')
-    .setDescription('Graceful stop, then restart the server'),
-  new SlashCommandBuilder()
-    .setName('palhelp')
-    .setDescription('Show all available Palworld commands'),
-].map(c => c.toJSON());
+import { REST, Routes } from 'discord.js';
+import { commandDefinitions } from './src/commands.js';
 
 // Initialize Discord REST client with API version 10 for command registration
 const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
@@ -66,7 +40,7 @@ const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
     // Alternative: Routes.applicationCommands(CLIENT_ID) for global registration
     await rest.put(
       Routes.applicationGuildCommands(process.env.CLIENT_ID, process.env.GUILD_ID),
-      { body: commands }
+      { body: commandDefinitions }
     );
     
     console.log('Done.');

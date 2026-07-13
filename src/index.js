@@ -1,5 +1,6 @@
 import 'dotenv/config';
-import { Client, GatewayIntentBits, Partials, PermissionsBitField, EmbedBuilder } from 'discord.js';
+import { Client, GatewayIntentBits, Partials, PermissionsBitField, EmbedBuilder, REST, Routes } from 'discord.js';
+import { commandDefinitions } from './commands.js';
 import { getInfo, getPlayers, getMetrics, saveWorld, shutdown, isUp } from './palworld.js';
 import { startServer } from './process.js';
 import { startMonitoring, setServerUp, setServerDown } from './monitor.js';
@@ -77,7 +78,20 @@ async function createServerStatusEmbed(title, color = '#00ff00') {
 
 client.once('ready', async () => {
   logger.info(`Bot logged in as ${client.user.tag}`);
-  
+
+  // Auto-register slash commands on startup so a packaged build is self-sufficient.
+  // A failure here must not stop the bot - commands may already be registered from a prior run.
+  try {
+    const rest = new REST({ version: '10' }).setToken(config.discord.token);
+    await rest.put(
+      Routes.applicationGuildCommands(config.discord.clientId, config.discord.guildId),
+      { body: commandDefinitions }
+    );
+    logger.info('Slash commands registered');
+  } catch (err) {
+    logger.error(`Slash command registration failed: ${sanitizeErrorMessage(err)}`);
+  }
+
   // Start background monitoring for auto-stop functionality
   await startMonitoring(gracefulShutdown, withLock, client);
 });
