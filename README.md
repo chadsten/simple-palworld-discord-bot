@@ -10,13 +10,30 @@ This is NOT a public bot; it's the code for a private bot you'll create for your
 - `/palplayers` – List connected players (clean names only)
 - `/palstart` – Launch server + show status when successful
 - `/palstop` – Save world → re-check players → graceful shutdown (only if players == 0)
+- `/palbounce` – Graceful stop, wait, then restart the server (clean reboot)
 - `/palhelp` – Show all available commands
 - **Auto-monitor** – Background monitoring stops server after 2 consecutive empty checks
 - **Discord Status Integration** – Bot's Discord presence shows real-time server status
+- **Standalone .exe** – Download a prebuilt Windows executable; no Node install required
 
 ---
 
-## Setup
+## Quick Start (Prebuilt .exe)
+
+The easiest way to run the bot — no Node.js install needed.
+
+1. Download `palworld-discord-bot.exe` from the [Releases](../../releases) page.
+2. Put it in a folder of your choice.
+3. Copy `.env.example` to a file named `.env` in that **same folder** and fill in your values (see [Environment Variables](#3-environment-variables-env)).
+4. Double-click the exe (or run it from a terminal). It logs in, registers its slash commands automatically, and starts monitoring.
+
+That's it — the exe reads `.env` from whatever folder it's launched in. To update, download the newer exe and replace the old one; your `.env` stays put.
+
+> The exe bundles its own Node.js runtime, so it's ~95 MB. It still shells out to Windows PowerShell to start your server, so it's Windows-only.
+
+---
+
+## Setup (From Source)
 
 ### 1. Prerequisites
 - **Windows 10/11**
@@ -51,18 +68,31 @@ The `.env.example` file contains comprehensive documentation for all settings in
 - Server management commands and timing
 - Auto-monitoring intervals and thresholds
 
-### 4. Install & Deploy
+### 4. Install & Run
 ```bash
-# Using npm
-npm install
-npm run deploy-commands
-npm run dev
-
-# OR using yarn  
 yarn install
-yarn deploy-commands
 yarn dev
 ```
+
+The bot **auto-registers its slash commands on startup**, so there's no separate deploy step. `yarn deploy-commands` still exists if you ever want to register commands manually without running the bot.
+
+---
+
+## Building & Releasing
+
+### Build the .exe locally
+```bash
+yarn build
+```
+Produces `dist/palworld-discord-bot.exe` (via [@yao-pkg/pkg](https://github.com/yao-pkg/pkg) in SEA mode, targeting Node 22 / Windows x64). Ship it alongside a `.env` file.
+
+### Cut a release (automated)
+Pushing a version tag triggers a GitHub Actions workflow (`.github/workflows/release.yml`) that builds the exe on a Windows runner and publishes it to a GitHub Release:
+```bash
+git tag v1.1.0
+git push origin v1.1.0
+```
+A few minutes later, `palworld-discord-bot.exe` is attached to the release, ready to download.
 
 ---
 
@@ -85,6 +115,12 @@ yarn dev
 3. Saves world (`/save`)
 4. Re-checks player list after 1.5 second delay
 5. If still 0 players → graceful shutdown with 2-second delay
+
+### `/palbounce`
+1. Runs the full `/palstop` graceful-stop sequence
+2. If the stop is aborted (players online or server already down) → bounce aborts, server is **not** restarted
+3. On a clean stop → waits (default 15s, configurable via `BOUNCE_DELAY_MS`)
+4. Starts the server back up and shows status — a combined clean reboot
 
 ### Auto-Monitor Background Process
 1. Runs automatically every 10 minutes (configurable, minimum 1 minute)
@@ -113,8 +149,9 @@ This bot implements some security measures:
 ## Files
 
 ### Core Files
-- `deploy-commands.js` – Registers slash commands with Discord
-- `src/index.js` – Discord bot main file with command handlers
+- `deploy-commands.js` – Optional manual slash-command registration
+- `src/index.js` – Discord bot main file with command handlers (auto-registers commands on startup)
+- `src/commands.js` – Slash command definitions (single source of truth)
 - `src/palworld.js` – Palworld REST API client
 - `src/process.js` – Server management (executable/Windows service)
 - `src/monitor.js` – Background monitoring and Discord status updates
@@ -122,9 +159,12 @@ This bot implements some security measures:
 ### Configuration & Security
 - `src/config/index.js` – Centralized configuration management with validation
 - `src/middleware/auth.js` – Role-based authorization middleware
-- `src/error-handler.js` – Centralized error handling with sanitization
 - `src/utils/security.js` – Input sanitization and security utilities
 - `src/utils/logger.js` – Structured logging system
+- `src/utils/async.js` – Shared sleep/poll helpers
+
+### Build & CI
+- `.github/workflows/release.yml` – Builds the exe and publishes a Release on version-tag push
 
 ### Environment & Documentation
 - `.env.example` – Template environment file with comprehensive documentation
