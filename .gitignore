@@ -119,7 +119,11 @@ CLAUDE.md
 
 # Build outputs
 dist/
+/dist
 build/
+
+# Packaged executables (pkg / SEA build output)
+*.exe
 
 # Database files (if any)
 *.db
@@ -149,3 +153,4 @@ build/
 # Bot-specific sensitive files
 discord-token.txt
 palworld-password.txt
+TASKS.md
