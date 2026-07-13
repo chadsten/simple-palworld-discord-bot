@@ -1,0 +1,45 @@
+name: Release
+
+# Build the standalone Windows executable and attach it to a GitHub Release
+# whenever a version tag (e.g. v1.1.0) is pushed.
+#
+#   git tag v1.1.0
+#   git push origin v1.1.0
+#
+# A few minutes later, palworld-discord-bot.exe is downloadable from the
+# repository's Releases page.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+# Required so the workflow can create a Release and upload the exe to it.
+permissions:
+  contents: write
+
+jobs:
+  build:
+    # Windows runner: the exe targets Windows, so build natively on Windows.
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: yarn
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Build executable
+        run: yarn build
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: dist/*.exe
