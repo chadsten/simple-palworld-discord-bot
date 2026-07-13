@@ -73,7 +73,8 @@ const config = {
   discord: {
     token: validateRequired('DISCORD_TOKEN', process.env.DISCORD_TOKEN),
     clientId: validateRequired('CLIENT_ID', process.env.CLIENT_ID),
-    guildId: validateRequired('GUILD_ID', process.env.GUILD_ID)
+    guildId: validateRequired('GUILD_ID', process.env.GUILD_ID),
+    roleName: validateOptionalString(process.env.PALSERVER_ROLE_NAME) || 'palserver'
   },
 
   // Palworld REST API Configuration
