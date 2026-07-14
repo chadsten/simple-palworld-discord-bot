@@ -1,6 +1,6 @@
 {
   "name": "palworld-discord-bot",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "private": true,
   "type": "module",
   "bin": "src/main.js",
@@ -15,7 +15,8 @@
   "pkg": {
     "targets": ["node22-win-x64"],
     "outputPath": "dist",
-    "sea": true
+    "sea": true,
+    "assets": [".env.example"]
   },
   "dependencies": {
     "discord.js": "^14.16.3",
