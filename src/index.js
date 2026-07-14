@@ -206,7 +206,7 @@ client.on('interactionCreate', async (interaction) => {
             // Check if API is responding and show status if available
             try {
               const embed = await createServerStatusEmbed('Server Restarted');
-              return interaction.editReply({ content: 'Server bounced successfully!', embeds: [embed] });
+              return interaction.editReply({ content: 'Server restarted successfully!', embeds: [embed] });
             } catch {
               // API not responding yet, fall back to simple message
               return interaction.editReply('Bounce complete. Server should be up shortly.');
