@@ -142,6 +142,8 @@ async function performMonitorCheck(gracefulShutdownFn, withLockFn) {
             logger.info(`Auto-stop successful: ${result.message}`);
             // Reset counter after successful shutdown
             consecutiveEmptyChecks = 0;
+            // Announce to the configured channel (best-effort, never throws)
+            await announce(`🛑 ${lastKnownServerName} auto-stopped — no players online.`);
           } else {
             logger.warn(`Auto-stop failed: ${result.message}`);
             // Keep the counter if shutdown failed (maybe players joined during shutdown)
@@ -230,5 +232,34 @@ async function updateDiscordStatus() {
   } catch (error) {
     const sanitizedMessage = sanitizeErrorMessage(error);
     logger.error('Failed to update Discord status', { error: sanitizedMessage });
+  }
+}
+
+/**
+ * Sends a message to the configured announcement channel
+ * Best-effort: silently disabled when unconfigured, never throws
+ * @param {string} message - Message to post to the channel
+ * @private
+ */
+async function announce(message) {
+  if (!config.discord.announceChannelId) {
+    return;
+  }
+
+  if (!discordClient) {
+    logger.debug('Discord client not available, skipping announcement');
+    return;
+  }
+
+  try {
+    const channel = await discordClient.channels.fetch(config.discord.announceChannelId);
+    if (!channel?.isTextBased?.()) {
+      logger.warn(`Announce channel not found or not text-based: ${config.discord.announceChannelId}`);
+      return;
+    }
+    await channel.send(message);
+  } catch (error) {
+    const sanitizedMessage = sanitizeErrorMessage(error);
+    logger.warn('Failed to send announcement', { error: sanitizedMessage });
   }
 }
