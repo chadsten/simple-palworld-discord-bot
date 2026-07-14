@@ -1,9 +1,14 @@
 import 'dotenv/config';
 import { spawn } from 'node:child_process';
+import fs from 'node:fs';
 import { isUp } from './palworld.js';
 import { validateServiceName, validateStartCommand, sanitizeErrorMessage } from './utils/security.js';
 import { waitFor } from './utils/async.js';
+import { ensureLogDir, logPath, rolloverIfLarge, MAX_LOG_BYTES } from './utils/logfiles.js';
+import { createLogger } from './utils/logger.js';
 import config from './config/index.js';
+
+const logger = createLogger('Process');
 
 export async function startServer() {
   try {
@@ -115,12 +120,31 @@ async function runSecureDetached(executable, args = [], cwd) {
         return;
       }
 
+      // Redirect the game server's stdout+stderr to logs/palserver.log so its
+      // output is captured rather than discarded (Palworld writes no log itself).
+      // The redirect uses a raw file descriptor - NOT a JS pipe - because the
+      // child is detached and unref'd: the OS owns the write end via the
+      // inherited fd, so output keeps flowing after the parent goes away.
+      // If opening the log fails, fall back to the original 'ignore' behaviour
+      // so the server launch never fails just because logging couldn't start.
+      let out = null;
+      try {
+        ensureLogDir();
+        const gameLogPath = logPath('palserver.log');
+        // Roll first so a fresh run doesn't append onto an already-huge file.
+        rolloverIfLarge(gameLogPath, MAX_LOG_BYTES);
+        out = fs.openSync(gameLogPath, 'a');
+      } catch (error) {
+        out = null;
+        logger.warn(`Game output logging disabled: ${sanitizeErrorMessage(error)}`);
+      }
+
       // Spawn process without shell to prevent injection
       const child = spawn(executable, args, {
         cwd: cwd || undefined,
         shell: false, // Critical: no shell to prevent injection
         detached: true,
-        stdio: 'ignore',
+        stdio: out === null ? 'ignore' : ['ignore', out, out],
         windowsHide: true
       });
 
@@ -131,6 +155,14 @@ async function runSecureDetached(executable, args = [], cwd) {
 
       // For detached processes, we resolve immediately after spawn
       child.unref();
+
+      // The child inherited its own copy of the fd, so close the parent's copy
+      // to avoid leaking the handle; the detached child keeps writing via its
+      // inherited handle. Best-effort - a failed close must not break launch.
+      if (out !== null) {
+        try { fs.closeSync(out); } catch {}
+      }
+
       resolve();
 
     } catch (error) {

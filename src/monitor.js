@@ -2,6 +2,7 @@ import 'dotenv/config';
 import { isUp, getPlayers, getInfo } from './palworld.js';
 import { sanitizeErrorMessage } from './utils/security.js';
 import { createLogger } from './utils/logger.js';
+import { logPath, rolloverIfLarge, MAX_LOG_BYTES } from './utils/logfiles.js';
 import config from './config/index.js';
 import { ActivityType } from 'discord.js';
 
@@ -92,6 +93,14 @@ export async function startMonitoring(gracefulShutdownFn, withLockFn, client = n
  */
 async function performMonitorCheck(gracefulShutdownFn, withLockFn) {
   logger.debug('Starting monitor check');
+
+  // The detached game process owns palserver.log directly, so the bot can't
+  // roll it inline - piggyback a size check on each monitor cycle instead.
+  // While the server is running Windows may refuse to rename a file it holds
+  // an open handle on (EBUSY/EPERM); rolloverIfLarge swallows that, so the
+  // rename is simply deferred until the process releases the handle (server
+  // stop) and the next check succeeds. We never force-close the game's handle.
+  rolloverIfLarge(logPath('palserver.log'), MAX_LOG_BYTES);
 
   // Skip monitoring entirely when we know server is down
   if (serverState === SERVER_STATE.KNOWN_DOWN) {
