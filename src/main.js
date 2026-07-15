@@ -22,6 +22,25 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
+
+/**
+ * Pops a native Windows message box so a windowless (GUI-subsystem) exe can
+ * surface a startup problem the user would otherwise never see - under the
+ * packaged exe stdout/stderr are a black hole. Shelled out via PowerShell to
+ * avoid a native dependency; blocking, so the launch path waits for the click.
+ * Best-effort: a dialog failure must never derail the exit path.
+ * @param {string} title - Message box caption
+ * @param {string} text - Message box body text
+ */
+function showDialog(title, text) {
+  try {
+    spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-Command',
+      `Add-Type -AssemblyName System.Windows.Forms;` +
+      `[System.Windows.Forms.MessageBox]::Show(${JSON.stringify(text)}, ${JSON.stringify(title)}) | Out-Null`
+    ], { windowsHide: true });
+  } catch { /* dialog is best-effort; never let it crash the exit path */ }
+}
 
 /**
  * Waits for a single keypress when attached to an interactive terminal so a
@@ -88,6 +107,16 @@ function bootstrapFirstRun() {
   process.stdout.write('  Open .env, add your Discord token and server info\n');
   process.stdout.write('  (see .env.example for help), then run the bot again.\n');
   process.stdout.write('========================================\n');
+
+  // When there is no console (windowless exe) the message above is invisible, so
+  // surface it as a native dialog. From a terminal (TTY) the text above suffices.
+  if (!process.stdout.isTTY) {
+    showDialog(
+      'Palworld Discord Bot - first run',
+      'Created a starter .env in this folder. Open it, add your Discord token and server info, then run the bot again.'
+    );
+  }
+
   pauseIfInteractive(0);
   return true;
 }
@@ -101,6 +130,9 @@ function bootstrapFirstRun() {
 function handleFatal(err) {
   const message = err instanceof Error ? err.message : String(err);
 
+  const isEnvError =
+    /Required environment variable/.test(message) || /environment variable/i.test(message);
+
   process.stderr.write('\n========================================\n');
   process.stderr.write('  Palworld Discord Bot failed to start\n');
   process.stderr.write('========================================\n');
@@ -108,12 +140,24 @@ function handleFatal(err) {
 
   // Missing configuration is by far the most common cause, and the fix is
   // non-obvious for a packaged exe, so call it out explicitly.
-  if (/Required environment variable/.test(message) || /environment variable/i.test(message)) {
+  if (isEnvError) {
     process.stderr.write('\n  A .env file must sit in the SAME folder you launch the bot from.\n');
     process.stderr.write('  Copy .env.example to .env there and fill in your values.\n');
   }
 
   process.stderr.write('========================================\n');
+
+  // Under the windowless exe the stderr block above is invisible, so surface the
+  // same human-readable text as a native dialog before exiting. spawnSync blocks
+  // until the user clicks OK, so it must run before pauseIfInteractive()'s exit.
+  if (!process.stdout.isTTY) {
+    const dialogText = isEnvError
+      ? `${message}\n\nA .env file must sit in the SAME folder you launch the bot from. ` +
+        'Copy .env.example to .env there and fill in your values.'
+      : message;
+    showDialog('Palworld Discord Bot - failed to start', dialogText);
+  }
+
   pauseIfInteractive();
 }
 
@@ -127,7 +171,18 @@ if (!bootstrapFirstRun()) {
   try {
     // Dynamic import defers config loading into this try block so an import-time
     // throw from src/config/index.js is caught rather than crashing the process.
-    await import('./index.js');
+    const { client } = await import('./index.js');
+
+    // Start the system tray only after the bot has booted, and never let a tray
+    // failure take the bot down - it keeps running headless if the tray can't
+    // start. The tray receives the live client so "Quit" can destroy it cleanly.
+    try {
+      const { startTray } = await import('./tray.js');
+      await startTray(client);
+    } catch (trayErr) {
+      // handleFatal would exit the process; the tray is non-essential, so just log.
+      process.stderr.write(`\n  System tray unavailable: ${trayErr instanceof Error ? trayErr.message : String(trayErr)}\n`);
+    }
   } catch (err) {
     handleFatal(err);
   }

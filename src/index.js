@@ -307,3 +307,7 @@ client.login(config.discord.token);
 
 // Log successful startup
 logger.info(`Discord bot starting up - Node ${process.version}`);
+
+// Exported so the guarded entry point (main.js) can hand the live client to the
+// system-tray so a tray "Quit" can cleanly destroy the Discord connection.
+export { client };
