@@ -16,15 +16,18 @@
  * guarantee that invariant across future pkg/resedit changes, the generated binary
  * is re-parsed in-memory and the blob's presence and exact size are asserted BEFORE
  * the exe on disk is overwritten — so a regression fails the build loudly and never
- * ships a broken exe. Invoked from the `build` script after pkg produces
- * dist/palworld-discord-bot.exe. Exits non-zero on failure.
+ * ships a broken exe. It also folds a VersionInfo resource (RT_VERSION, distinct from
+ * the RCDATA blob) into the same resource pass so Task Manager and the file properties
+ * show the app name rather than "Node.js". Invoked from the `build` script after pkg
+ * produces dist/exos-palworld-bot.exe. Exits non-zero on failure.
  */
 import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { NtExecutable, NtExecutableResource, Data, Resource } from 'resedit';
 
-const exePath = fileURLToPath(new URL('../dist/palworld-discord-bot.exe', import.meta.url));
+const exePath = fileURLToPath(new URL('../dist/exos-palworld-bot.exe', import.meta.url));
 const iconPath = fileURLToPath(new URL('../assets/app.ico', import.meta.url));
+const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 
 /** PE resource type RT_RCDATA — the type postject uses for the SEA payload. */
 const RT_RCDATA = 10;
@@ -53,6 +56,27 @@ try {
     1033,
     iconFile.icons.map((icon) => icon.data)
   );
+
+  // Stamp a VersionInfo resource so Task Manager, the taskbar, and file properties
+  // report the app name (FileDescription) instead of the generic "Node.js". Version
+  // numbers come from package.json; setFileVersion/setProductVersion write both the
+  // numeric VS_FIXEDFILEINFO and the matching string values (1033 = en-US).
+  const [major, minor, patch] = pkg.version.split('.').map(Number);
+  const vi = Resource.VersionInfo.createEmpty();
+  vi.setFileVersion(major, minor, patch, 0, 1033);
+  vi.setProductVersion(major, minor, patch, 0, 1033);
+  vi.setStringValues(
+    { lang: 1033, codepage: 1200 },
+    {
+      ProductName: "Exo's Palworld Bot",
+      FileDescription: "Exo's Palworld Bot",
+      CompanyName: 'Exo',
+      OriginalFilename: 'exos-palworld-bot.exe',
+      InternalName: 'exos-palworld-bot',
+      LegalCopyright: 'Copyright 2026'
+    }
+  );
+  vi.outputToResourceEntries(res.entries);
 
   res.outputResource(exe);
 
