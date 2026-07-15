@@ -23,6 +23,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { healEnv } from './env-heal.js';
+import { createLogger } from './utils/logger.js';
 
 /**
  * Pops a native Windows message box so a windowless (GUI-subsystem) exe can
@@ -168,6 +170,22 @@ process.on('uncaughtException', handleFatal);
 // Seed a starter .env on first run. When this handles a first run it schedules
 // a clean exit, so we must not fall through to loading the (unconfigured) app.
 if (!bootstrapFirstRun()) {
+  // A real .env exists - restore any keys this build knows about that the user's
+  // .env is missing, appending them (with comments and example defaults) from the
+  // bundled template. Best-effort: a heal failure must never block boot. Runs
+  // before ./index.js so dotenv, loaded downstream, picks up the seeded values.
+  try {
+    const { healed } = healEnv(
+      path.join(process.cwd(), '.env'),
+      fileURLToPath(new URL('../.env.example', import.meta.url))
+    );
+    if (healed.length > 0) {
+      createLogger('EnvHeal').info(
+        `Added ${healed.length} missing key(s) to .env from .env.example: ${healed.join(', ')}`
+      );
+    }
+  } catch { /* self-heal is best-effort; never let it block startup */ }
+
   try {
     // Dynamic import defers config loading into this try block so an import-time
     // throw from src/config/index.js is caught rather than crashing the process.
