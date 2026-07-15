@@ -37,9 +37,9 @@ AdminPassword=your_admin_password
 
 Then:
 
-1. **Download** `palworld-discord-bot.exe` from the [Releases](../../releases) page and drop it in a folder.
+1. **Download** `exos-palworld-bot.exe` from the [Releases](../../releases) page and drop it in a folder.
 2. **Create a `.env`** in that **same folder**: copy [`.env.example`](.env.example), rename it to `.env`, and fill in your values (Discord token, server path, REST API login). `.env.example` documents every setting.
-3. **Run it** — double-click the exe. A window opens and stays open; the bot logs in and registers its commands automatically.
+3. **Run it** — double-click the exe. It runs silently in the background with a **system tray icon** (no console window); the bot logs in and registers its commands automatically. Right-click the tray icon to open logs, start/stop/reboot the server, force-kill it, or quit.
 
 That's it. To update, download a newer exe and replace the old one — your `.env` stays put.
 
@@ -62,7 +62,7 @@ npm run dev
 ```
 Build the exe yourself:
 ```bash
-npm run build   # -> dist/palworld-discord-bot.exe
+npm run build   # -> dist/exos-palworld-bot.exe
 ```
 Cut a release: push a `v*` tag and GitHub Actions builds the exe and attaches it to a Release.
 ```bash
