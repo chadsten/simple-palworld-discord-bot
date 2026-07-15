@@ -23,6 +23,8 @@ import { sanitizeErrorMessage } from './utils/security.js';
 import { createLogger } from './utils/logger.js';
 import { killServerTree } from './servercontrol.js';
 import { setServerDown, announceServerEvent } from './monitor.js';
+import { doStart, doStop, doBounce } from './actions.js';
+import config from './config/index.js';
 
 const require = createRequire(import.meta.url);
 const Tray = require('trayicon');
@@ -106,6 +108,24 @@ async function confirmKillServer() {
 }
 
 /**
+ * Runs a shared server action from the tray as the configured host actor and logs
+ * its structured result. Defensive: a failing action is logged, never thrown, so
+ * a bad command can never crash the tray. The action already owns the shared lock
+ * and its own announcement, so this wrapper only has to report the outcome.
+ * @param {string} label - Human label for logging (e.g. 'Start Server')
+ * @param {(options: {actor: string}) => Promise<{success: boolean, message: string}>} action - Shared action to run
+ */
+async function runTrayCommand(label, action) {
+  try {
+    logger.info(`${label} requested from tray`);
+    const result = await action({ actor: config.discord.hostActorName });
+    logger.info(result.message);
+  } catch (error) {
+    logger.error(`${label} failed from tray: ${sanitizeErrorMessage(error)}`);
+  }
+}
+
+/**
  * Performs the clean tray shutdown: tear down the tray helper, destroy the
  * Discord client, then exit.
  * @param {object} tray - The active tray instance
@@ -147,13 +167,21 @@ function loadIcon() {
  */
 export async function startTray(client) {
   const icon = loadIcon();
-  const tray = await Tray.create({ title: 'Palworld Bot', icon, useTempDir: 'clean' });
+  const tray = await Tray.create({ title: "Exo's Palworld Bot", icon, useTempDir: 'clean' });
 
   // The helper can die abnormally (emits 'error' with "Invalid exit code N").
   // Log it rather than letting an unhandled 'error' event crash the process.
   tray.on('error', (e) => {
     logger.error(`Tray helper error: ${sanitizeErrorMessage(String(e))}`);
   });
+
+  // "Commands" groups the same server controls as the Discord slash commands,
+  // run host-side as the configured actor. Each child runs its shared action
+  // defensively so a failure only logs and never crashes the tray.
+  const commands = tray.item('Commands');
+  commands.add(tray.item('Start Server', () => { void runTrayCommand('Start Server', doStart); }));
+  commands.add(tray.item('Reboot Server', () => { void runTrayCommand('Reboot Server', doBounce); }));
+  commands.add(tray.item('Stop Server', () => { void runTrayCommand('Stop Server', doStop); }));
 
   // "Kill Server" is destructive, so it lives behind a two-step submenu: the top
   // item is inert and only its "Confirm Kill Server" child actually kills.
@@ -165,6 +193,7 @@ export async function startTray(client) {
     tray.item('Open Bot Logs', () => openPath(logPath('bot.log'))),
     tray.item('Open Game Logs', () => openPath(logPath('palserver.log'))),
     tray.separator(),
+    commands,
     tray.item('Restart Bot', () => restartBot(tray)),
     killServer,
     tray.separator(),
