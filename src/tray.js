@@ -18,7 +18,7 @@ import { createRequire } from 'node:module';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import fs from 'node:fs';
-import { logPath } from './utils/logfiles.js';
+import { logPath, getLogDir, ensureLogDir } from './utils/logfiles.js';
 import { sanitizeErrorMessage } from './utils/security.js';
 import { createLogger } from './utils/logger.js';
 import { killServerTree } from './servercontrol.js';
@@ -34,12 +34,21 @@ const logger = createLogger('Tray');
 /**
  * Opens a filesystem path with the OS default handler. When the target file does
  * not exist yet (e.g. palserver.log before the first /palstart), the logs folder
- * is opened instead so the click always does something useful.
+ * is created if needed and opened instead so the click always lands on the real
+ * logs location - passing a clean directory path (not a trailing-separator path
+ * to a missing dir) stops Windows explorer from bailing to Documents.
  * Detached + unref'd so the spawned viewer never blocks or outlives-block the bot.
  * @param {string} filePath - Path to open
  */
 function openPath(filePath) {
-  const target = fs.existsSync(filePath) ? filePath : logPath('');
+  let target = filePath;
+  if (!fs.existsSync(filePath)) {
+    // Ensure the logs dir exists so explorer opens it rather than falling back to
+    // Documents. Best-effort: a mkdir failure must not crash the tray, so still
+    // attempt the open with the (possibly missing) dir path.
+    try { ensureLogDir(); } catch {}
+    target = getLogDir();
+  }
   try {
     // explorer.exe resolves both files (default handler) and folders. shell:false
     // with an args array keeps the path injection-safe.
