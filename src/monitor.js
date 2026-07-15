@@ -3,6 +3,7 @@ import { isUp, getPlayers, getInfo } from './palworld.js';
 import { sanitizeErrorMessage } from './utils/security.js';
 import { createLogger } from './utils/logger.js';
 import { logPath, rolloverIfLarge, MAX_LOG_BYTES } from './utils/logfiles.js';
+import { clearTrackedServerPid } from './servercontrol.js';
 import config from './config/index.js';
 import { ActivityType } from 'discord.js';
 
@@ -46,6 +47,9 @@ async function handleServerDown() {
     serverState = SERVER_STATE.KNOWN_DOWN;
     consecutiveEmptyChecks = 0;
     logger.info('Monitoring Paused');
+    // The tracked server process is gone, so drop its PID file to avoid a stale
+    // entry lingering for the tray "Kill Server" action. Best-effort.
+    clearTrackedServerPid();
     await updateDiscordStatus();
   }
 }
@@ -250,6 +254,16 @@ async function updateDiscordStatus() {
  * @param {string} message - Message to post to the channel
  * @private
  */
+/**
+ * Public wrapper around the private announce() for callers outside the monitor
+ * (e.g. the tray "Kill Server" action) that need to post to the announcement
+ * channel. Best-effort and silent when unconfigured, mirroring announce().
+ * @param {string} message - Message to post to the channel
+ */
+export async function announceServerEvent(message) {
+  await announce(message);
+}
+
 async function announce(message) {
   if (!config.discord.announceChannelId) {
     return;

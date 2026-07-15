@@ -6,6 +6,7 @@ import { validateServiceName, validateStartCommand, sanitizeErrorMessage } from 
 import { waitFor } from './utils/async.js';
 import { ensureLogDir, logPath, rolloverIfLarge, MAX_LOG_BYTES } from './utils/logfiles.js';
 import { createLogger } from './utils/logger.js';
+import { recordServerPid } from './servercontrol.js';
 import config from './config/index.js';
 
 const logger = createLogger('Process');
@@ -152,6 +153,11 @@ async function runSecureDetached(executable, args = [], cwd) {
         const sanitizedError = sanitizeErrorMessage(error);
         reject(new Error(sanitizedError));
       });
+
+      // Track the spawned PID so the tray "Kill Server" action can force-kill the
+      // whole process tree later - name-based killing is unsafe because launcher
+      // and server both surface as "Pal.exe". Best-effort: never fail the launch.
+      recordServerPid(child.pid);
 
       // For detached processes, we resolve immediately after spawn
       child.unref();
