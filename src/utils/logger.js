@@ -128,8 +128,3 @@ export function createLogger(component) {
     debug: (message) => log(LOG_LEVELS.DEBUG, component, message)
   };
 }
-
-/**
- * Global logger instance
- */
-export const logger = createLogger('Global');

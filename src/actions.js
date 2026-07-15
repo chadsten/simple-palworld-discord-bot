@@ -21,12 +21,9 @@ import { getPlayers, saveWorld, shutdown, isUp } from './palworld.js';
 import { startServer } from './process.js';
 import { setServerUp, setServerDown, announceServerEvent } from './monitor.js';
 import { sanitizeErrorMessage } from './utils/security.js';
-import { createLogger } from './utils/logger.js';
 import { sleep, waitFor } from './utils/async.js';
 import { withLock } from './lock.js';
 import config from './config/index.js';
-
-const logger = createLogger('Actions');
 
 /**
  * Posts a best-effort actor-named line to the announce channel after a successful

@@ -4,6 +4,7 @@ import { sanitizeErrorMessage } from './utils/security.js';
 import { createLogger } from './utils/logger.js';
 import { logPath, rolloverIfLarge, MAX_LOG_BYTES } from './utils/logfiles.js';
 import { clearTrackedServerPid } from './servercontrol.js';
+import { withLock } from './lock.js';
 import config from './config/index.js';
 import { ActivityType } from 'discord.js';
 
@@ -57,10 +58,9 @@ async function handleServerDown() {
 /**
  * Starts the background server monitoring system
  * @param {Function} gracefulShutdownFn - Function to call for graceful shutdown
- * @param {Function} withLockFn - Lock mechanism to prevent concurrent operations
  * @param {Client} client - Discord client for status updates
  */
-export async function startMonitoring(gracefulShutdownFn, withLockFn, client = null) {
+export async function startMonitoring(gracefulShutdownFn, client = null) {
   discordClient = client;
   if (monitoringActive) {
     logger.info('Already active, skipping start');
@@ -86,16 +86,15 @@ export async function startMonitoring(gracefulShutdownFn, withLockFn, client = n
   }
   
   intervalId = setInterval(async () => {
-    await performMonitorCheck(gracefulShutdownFn, withLockFn);
+    await performMonitorCheck(gracefulShutdownFn);
   }, config.monitoring.intervalMs);
 }
 
 /**
  * Performs a single monitoring check
  * @param {Function} gracefulShutdownFn - Function to call for graceful shutdown
- * @param {Function} withLockFn - Lock mechanism to prevent concurrent operations
  */
-async function performMonitorCheck(gracefulShutdownFn, withLockFn) {
+async function performMonitorCheck(gracefulShutdownFn) {
   logger.debug('Starting monitor check');
 
   // The detached game process owns palserver.log directly, so the bot can't
@@ -147,7 +146,7 @@ async function performMonitorCheck(gracefulShutdownFn, withLockFn) {
         
         // Use the lock mechanism to prevent conflicts with manual commands
         try {
-          const result = await withLockFn(async () => {
+          const result = await withLock(async () => {
             return await gracefulShutdownFn();
           });
           

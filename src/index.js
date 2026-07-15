@@ -6,7 +6,6 @@ import { startMonitoring } from './monitor.js';
 import { sanitizeErrorMessage } from './utils/security.js';
 import { createLogger } from './utils/logger.js';
 import { checkAuthorization } from './middleware/auth.js';
-import { withLock } from './lock.js';
 import { gracefulShutdown, doStart, doStop, doBounce } from './actions.js';
 import config from './config/index.js';
 
@@ -106,7 +105,7 @@ client.once('ready', async () => {
   }
 
   // Start background monitoring for auto-stop functionality
-  await startMonitoring(gracefulShutdown, withLock, client);
+  await startMonitoring(gracefulShutdown, client);
 });
 
 client.on('interactionCreate', async (interaction) => {
