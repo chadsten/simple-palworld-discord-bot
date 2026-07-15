@@ -157,29 +157,72 @@ function validateExecutablePath(executablePath) {
  * @param {string} arg - Command argument to validate
  * @throws {Error} If argument contains dangerous patterns
  */
-function validateCommandArgument(arg) {
+export function validateCommandArgument(arg) {
   if (typeof arg !== 'string') {
     throw new Error('Command argument must be a string');
   }
-  
+
   if (arg.length > 1024) {
     throw new Error('Command argument too long');
   }
-  
-  // Prevent shell injection patterns in arguments
+
+  // Prevent shell injection patterns in arguments. The literal double quote is
+  // rejected because each arg is embedded as a single-quoted token inside the
+  // generated `cmd /c "..."` line; an embedded " would break out of that quoting.
+  // A legitimate Palworld server argument never contains a literal double quote.
   const dangerousPatterns = [
-    /[;&|`$()]/,          // Shell metacharacters
+    /[;&|`$()"]/,         // Shell metacharacters and the quote that breaks cmd quoting
+    /[\x00-\x1f]/,        // Control chars (CR/LF/tab) that could inject new tokens/lines
     /\s*(-|\/)(c|command|exec)\s+/i,  // Command execution flags
     /\$\{.*\}/,           // Variable expansion
     /`.*`/,               // Command substitution
     /\$\(.*\)/,           // Command substitution
   ];
-  
+
   for (const pattern of dangerousPatterns) {
     if (pattern.test(arg)) {
       throw new Error('Command argument contains dangerous patterns');
     }
   }
+}
+
+/**
+ * Validates an operator-supplied working directory (START_CWD) before it is
+ * embedded into the generated launch VBScript. The VBS is line-based (joined by
+ * CR/LF) and only doubles embedded double quotes, so a control character in the
+ * path could inject additional VBScript lines that wscript would execute. This
+ * rejects any control character and the shell metacharacters the other
+ * validators block, so the value can be embedded as a single quoted literal.
+ * @param {string} cwd - The working directory path to validate
+ * @returns {string} The trimmed, validated path
+ * @throws {Error} If the path is not a string, is empty, or contains dangerous characters
+ */
+export function validateWorkingDirectory(cwd) {
+  if (typeof cwd !== 'string') {
+    throw new Error('Working directory must be a string');
+  }
+
+  const trimmed = cwd.trim();
+
+  if (trimmed.length === 0 || trimmed.length > 260) {
+    throw new Error('Working directory must be between 1 and 260 characters');
+  }
+
+  // Reject control chars (CR/LF/tab/etc.) that would inject VBScript lines, and
+  // the shell metacharacters the other validators block. The double quote is
+  // included because the path is embedded as a double-quoted VBScript literal.
+  const dangerousPatterns = [
+    /[\x00-\x1f]/,        // Control characters (newline/CR/tab/etc.)
+    /[;&|`$()"<>|*?]/,    // Shell metacharacters and Windows-invalid path chars
+  ];
+
+  for (const pattern of dangerousPatterns) {
+    if (pattern.test(trimmed)) {
+      throw new Error('Working directory contains dangerous characters');
+    }
+  }
+
+  return trimmed;
 }
 
 /**

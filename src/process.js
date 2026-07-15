@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { isUp } from './palworld.js';
-import { validateServiceName, validateStartCommand, sanitizeErrorMessage } from './utils/security.js';
+import { validateServiceName, validateStartCommand, validateWorkingDirectory, sanitizeErrorMessage } from './utils/security.js';
 import { waitFor, sleep } from './utils/async.js';
 import { ensureLogDir, logPath, rolloverIfLarge, MAX_LOG_BYTES } from './utils/logfiles.js';
 import { createLogger } from './utils/logger.js';
@@ -46,9 +46,12 @@ export async function startServer() {
       validateServiceName(serviceName);
       await runSecurePowerShell('Start-Service', ['-Name', serviceName]);
     } else if (startCmd) {
-      // Validate and parse start command
+      // Validate and parse start command, and the optional working directory,
+      // before either reaches the generated launch VBScript.
       const { executable, args } = validateStartCommand(startCmd);
-      const workingDir = config.server.startWorkingDirectory;
+      const workingDir = config.server.startWorkingDirectory
+        ? validateWorkingDirectory(config.server.startWorkingDirectory)
+        : null;
       await runSecureDetached(executable, args, workingDir);
     } else {
       throw new Error('No SERVICE_NAME or START_CMD configured');
@@ -165,8 +168,12 @@ async function runSecureDetached(executable, args = [], cwd) {
   // Stale PID from a previous launch must not be mistaken for this one's.
   try { fs.rmSync(launchPidPath, { force: true }); } catch {}
 
-  // Build the hidden cmd command line and the VBS, then write it to a path the
-  // bot controls (logs/) so a user-writable location can't be swapped underneath.
+  // Build the hidden cmd command line and the VBS, then write it under the bot's
+  // own logs/ directory before handing it to wscript. This is only as trustworthy
+  // as the bot's working directory: if logs/ lives somewhere world-writable, the
+  // VBS could be swapped between write and execute (a TOCTOU window). We rely on
+  // the bot running from a trusted, non-world-writable location rather than an
+  // ACL check here (out of scope for a physical-host-trust tool).
   const commandLine = buildHiddenCommandLine(executable, args, gameLogPath);
   const vbs = buildLaunchVbs(commandLine, cwd, launchPidPath);
   fs.writeFileSync(vbsPath, vbs);
@@ -197,13 +204,17 @@ async function runSecureDetached(executable, args = [], cwd) {
  * are quoted, so the whole inner command is wrapped in an extra quote pair - the
  * documented `cmd /c "..."` rule that lets cmd keep the inner quotes intact.
  * @param {string} executable - Server executable path
- * @param {string[]} args - Argument list (already validated, injection-safe)
+ * @param {string[]} args - Operator-supplied arg list, already validated to
+ *   reject shell metacharacters, control chars, and double quotes
  * @param {string} logPathAbs - Absolute path of the game log to append to
  * @returns {string} A single command-line string for Win32_Process.Create
  */
 export function buildHiddenCommandLine(executable, args, logPathAbs) {
-  // Native Windows path form for cmd. args were validated to contain no shell
-  // metacharacters, so quoting each is sufficient to keep them as single tokens.
+  // Native Windows path form for cmd. Each arg is wrapped in one quote pair;
+  // validateCommandArgument already rejected shell metacharacters, control
+  // chars, and the double quote that could break out of that quoting, so a
+  // single quote pair keeps each arg as one token. This assumes the operator-
+  // controlled START_CMD was validated, not that arbitrary input is safe.
   const quotedExe = `"${path.win32.normalize(executable)}"`;
   const quotedArgs = args.map(a => `"${a}"`).join(' ');
   const quotedLog = `"${path.win32.normalize(logPathAbs)}"`;
@@ -214,6 +225,11 @@ export function buildHiddenCommandLine(executable, args, logPathAbs) {
 /**
  * Escapes a string for embedding inside a double-quoted VBScript string literal.
  * VBScript escapes a double quote by doubling it; there is no backslash escaping.
+ * This only makes the value a safe single-line literal for inputs that carry no
+ * control characters - the VBS is line-based (joined by CR/LF), so a raw CR/LF
+ * would still start a new script line. Callers therefore validate operator input
+ * (START_CMD via validateStartCommand, START_CWD via validateWorkingDirectory)
+ * to reject control chars before it reaches here; this is not a general escaper.
  * @param {string} value - Raw string
  * @returns {string} VBScript-safe string (without surrounding quotes)
  */
