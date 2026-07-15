@@ -10,19 +10,28 @@
   "scripts": {
     "dev": "node src/main.js",
     "deploy-commands": "node deploy-commands.js",
-    "build": "pkg ."
+    "build": "pkg . && node scripts/set-exe-icon.js"
   },
   "pkg": {
-    "targets": ["node22-win-x64"],
+    "targets": [
+      "node22-win-x64"
+    ],
     "outputPath": "dist",
     "sea": true,
-    "assets": [".env.example"]
+    "assets": [
+      ".env.example",
+      "node_modules/trayicon/rsrcs/**/*",
+      "assets/app.ico"
+    ]
   },
   "dependencies": {
     "discord.js": "^14.16.3",
-    "dotenv": "^16.4.5"
+    "dotenv": "^16.4.5",
+    "trayicon": "^1.2.2"
   },
   "devDependencies": {
-    "@yao-pkg/pkg": "^6.21.0"
+    "@yao-pkg/pkg": "^6.21.0",
+    "png-to-ico": "^3.0.2",
+    "resedit": "^3.0.2"
   }
 }

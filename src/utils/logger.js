@@ -104,13 +104,18 @@ function log(level, component, message) {
   const levelName = LEVEL_NAMES[level];
   const formattedMessage = formatMessage(levelName, component, message);
 
-  if (level === LOG_LEVELS.ERROR) {
-    console.error(formattedMessage);
-  } else if (level === LOG_LEVELS.WARN) {
-    console.warn(formattedMessage);
-  } else {
-    console.log(formattedMessage);
-  }
+  // Console output is best-effort: under the windowless (GUI-subsystem) exe stdout
+  // is a black hole, so a hypothetical write failure must never propagate. The
+  // bot.log tee below runs regardless.
+  try {
+    if (level === LOG_LEVELS.ERROR) {
+      console.error(formattedMessage);
+    } else if (level === LOG_LEVELS.WARN) {
+      console.warn(formattedMessage);
+    } else {
+      console.log(formattedMessage);
+    }
+  } catch {}
 
   appendToFile(formatPlain(levelName, component, message));
 }
