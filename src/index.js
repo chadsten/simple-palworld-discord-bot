@@ -1,27 +1,17 @@
 import 'dotenv/config';
 import { Client, GatewayIntentBits, Partials, PermissionsBitField, EmbedBuilder, REST, Routes } from 'discord.js';
 import { commandDefinitions } from './commands.js';
-import { getInfo, getPlayers, getMetrics, saveWorld, shutdown, isUp } from './palworld.js';
-import { startServer } from './process.js';
-import { startMonitoring, setServerUp, setServerDown } from './monitor.js';
+import { getInfo, getPlayers, getMetrics, isUp } from './palworld.js';
+import { startMonitoring } from './monitor.js';
 import { sanitizeErrorMessage } from './utils/security.js';
 import { createLogger } from './utils/logger.js';
-import { sleep, waitFor } from './utils/async.js';
 import { checkAuthorization } from './middleware/auth.js';
+import { withLock } from './lock.js';
+import { gracefulShutdown, doStart, doStop, doBounce } from './actions.js';
 import config from './config/index.js';
 
 const logger = createLogger('DiscordBot');
 const client = new Client({ intents: [GatewayIntentBits.Guilds], partials: [Partials.Channel] });
-
-// Global lock mechanism to prevent concurrent server operations
-// This is critical because multiple users could trigger start/stop simultaneously,
-// leading to race conditions and unpredictable server state
-let busy = false;
-const withLock = async (fn) => {
-  if (busy) throw new Error('Another operation is in progress.');
-  busy = true;
-  try { return await fn(); } finally { busy = false; }
-};
 
 
 /**
@@ -76,6 +66,29 @@ async function createServerStatusEmbed(title, color = '#00ff00') {
   return embed;
 }
 
+/**
+ * Renders a shared-action result to a deferred interaction. On success with an
+ * embedTitle it attaches a status embed (falling back to a plain message if the
+ * API isn't ready yet to build one); otherwise it edits in the plain message.
+ * @param {import('discord.js').ChatInputCommandInteraction} interaction
+ * @param {{success: boolean, message: string, embedTitle?: string}} result - Action result
+ * @param {string} embedFallbackMessage - Message to show if the embed can't be built
+ * @returns {Promise<*>} The editReply result
+ */
+async function replyWithResult(interaction, result, embedFallbackMessage) {
+  if (result.success && result.embedTitle) {
+    // Check if API is responding and show status if available
+    try {
+      const embed = await createServerStatusEmbed(result.embedTitle);
+      return interaction.editReply({ content: result.message, embeds: [embed] });
+    } catch {
+      // API not responding yet, fall back to simple message
+      return interaction.editReply(embedFallbackMessage);
+    }
+  }
+  return interaction.editReply(result.message);
+}
+
 client.once('ready', async () => {
   logger.info(`Bot logged in as ${client.user.tag}`);
 
@@ -98,6 +111,10 @@ client.once('ready', async () => {
 
 client.on('interactionCreate', async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
+
+  // Single DRY line naming who ran what, on the happy path for every command.
+  // Only the Discord user is available - Discord never exposes Steam identity.
+  logger.info(`/${interaction.commandName} invoked by ${interaction.user.username} (${interaction.user.id})`);
 
   try {
     switch (interaction.commandName) {
@@ -133,47 +150,21 @@ client.on('interactionCreate', async (interaction) => {
         // Authorization check - only users with 'palserver' role can start/stop server
         if (!checkAuthorization(interaction)) return;
         await interaction.deferReply();
-        
-        // Use lock to prevent concurrent start operations which could cause issues
-        return withLock(async () => {
-          const up = await isUp();
-          if (up) {
-            const embed = await createServerStatusEmbed('Server Status');
-            return interaction.editReply({ content: 'Server is already **UP**.', embeds: [embed] });
-          }
-          
-          try {
-            await startServer();
-            
-            // Notify monitor that server is now up
-            await setServerUp();
-            
-            // Check if API is responding and show status if available
-            try {
-              const embed = await createServerStatusEmbed('Server Started');
-              return interaction.editReply({ content: 'Server started successfully!', embeds: [embed] });
-            } catch {
-              // API not responding yet, fall back to simple message
-              return interaction.editReply('Launch requested. Server should be up shortly.');
-            }
-          } catch (e) {
-            // Provide specific error feedback to help with troubleshooting
-            const sanitizedMessage = sanitizeErrorMessage(e);
-            return interaction.editReply(`Start failed: \`${sanitizedMessage}\``);
-          }
-        }).catch(err => interaction.editReply(sanitizeErrorMessage(err)));
+
+        // Shared action owns the lock + start orchestration; this command just
+        // renders the result (embed on success, plain message otherwise).
+        const r = await doStart({ actor: interaction.user.username });
+        return replyWithResult(interaction, r, 'Launch requested. Server should be up shortly.');
       }
 
       case 'palstop': {
         // Authorization check - only users with 'palserver' role can start/stop server
         if (!checkAuthorization(interaction)) return;
         await interaction.deferReply();
-        
-        // Use lock to prevent concurrent stop operations which could cause corruption
-        return withLock(async () => {
-          const result = await gracefulShutdown();
-          return interaction.editReply(result.message);
-        }).catch(err => interaction.editReply(sanitizeErrorMessage(err)));
+
+        // Shared action owns the lock + graceful stop; message matches gracefulShutdown.
+        const r = await doStop({ actor: interaction.user.username });
+        return interaction.editReply(r.message);
       }
 
       case 'palbounce': {
@@ -181,41 +172,13 @@ client.on('interactionCreate', async (interaction) => {
         if (!checkAuthorization(interaction)) return;
         await interaction.deferReply();
 
-        // Run the entire stop+wait+start sequence under a single lock so the monitor
-        // and other commands cannot interleave mid-bounce and leave the server in a
-        // half-restarted state
-        return withLock(async () => {
-          // Reuse the graceful stop path - it handles the "players online" and
-          // "already down" cases and returns a structured result
-          const stopResult = await gracefulShutdown();
-          if (!stopResult.success) {
-            // Do not start the server if the stop did not succeed
-            return interaction.editReply(`Bounce aborted — ${stopResult.message}`);
-          }
-
-          // Stop succeeded - let the user know and wait before restarting
-          await interaction.editReply(`Server stopped. Restarting in ${Math.round(config.timing.bounceDelayMs / 1000)}s...`);
-          await sleep(config.timing.bounceDelayMs);
-
-          try {
-            await startServer();
-
-            // Notify monitor that server is now up
-            await setServerUp();
-
-            // Check if API is responding and show status if available
-            try {
-              const embed = await createServerStatusEmbed('Server Restarted');
-              return interaction.editReply({ content: 'Server restarted successfully!', embeds: [embed] });
-            } catch {
-              // API not responding yet, fall back to simple message
-              return interaction.editReply('Bounce complete. Server should be up shortly.');
-            }
-          } catch (e) {
-            // Stop already completed, so surface the restart failure specifically
-            return interaction.editReply(`Restart failed after stop: \`${sanitizeErrorMessage(e)}\``);
-          }
-        }).catch(err => interaction.editReply(sanitizeErrorMessage(err)));
+        // Shared action runs stop+wait+start under one lock; onProgress surfaces the
+        // intermediate "Restarting in Ns..." message via editReply, preserving UX.
+        const r = await doBounce({
+          actor: interaction.user.username,
+          onProgress: (m) => interaction.editReply(m)
+        });
+        return replyWithResult(interaction, r, 'Bounce complete. Server should be up shortly.');
       }
       case 'palhelp': {
         // Authorization check - only users with 'palserver' role can use any commands
@@ -250,58 +213,6 @@ client.on('interactionCreate', async (interaction) => {
     }
   }
 });
-
-/**
- * Executes graceful server shutdown with player checks and world save
- * Used by both manual /palstop command and auto-monitoring system
- * @returns {Promise<{success: boolean, message: string}>} Result of shutdown attempt
- */
-async function gracefulShutdown() {
-  // Check if server is up
-  const up = await isUp();
-  if (!up) return { success: false, message: 'Server already appears **DOWN**.' };
-  
-  // First player count check - don't stop if players are online
-  let players = await getPlayers();
-  if (players.length > 0) {
-    return { success: false, message: `Cannot stop: **${players.length}** player(s) online.` };
-  }
-  
-  try {
-    // Save world state before shutdown to prevent data loss
-    await saveWorld();
-    
-    // Wait after saving to allow any last-second player connections
-    // This prevents stopping the server right as someone joins
-    await sleep(config.timing.saveWorldDelayMs);
-    
-    // Second player count check - abort if players connected during save operation
-    // This double-check prevents accidentally stopping server with active players
-    players = await getPlayers();
-    if (players.length > 0) {
-      return { success: false, message: `Abort: **${players.length}** player(s) just connected.` };
-    }
-    
-    // Graceful shutdown with configured delay allows server to clean up properly
-    // The delay gives the server time to finish any pending operations
-    await shutdown(config.timing.shutdownDelaySeconds, 'Stopping (admin request).');
-    
-    // Wait for server to actually go down before confirming
-    const serverDown = await waitFor(async () => !(await isUp()), config.timing.startTimeoutMs, config.timing.pollIntervalMs);
-    if (!serverDown) {
-      return { success: false, message: 'Server shutdown timed out - may still be running.' };
-    }
-    
-    // Notify monitor that server is now down
-    await setServerDown();
-    
-    return { success: true, message: 'Graceful server stop completed.' };
-  } catch (e) {
-    // Provide specific error feedback for debugging server issues
-    const sanitizedMessage = sanitizeErrorMessage(e);
-    return { success: false, message: `Stop failed: \`${sanitizedMessage}\`` };
-  }
-}
 
 client.login(config.discord.token);
 

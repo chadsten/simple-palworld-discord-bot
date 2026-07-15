@@ -75,7 +75,8 @@ const config = {
     clientId: validateRequired('CLIENT_ID', process.env.CLIENT_ID),
     guildId: validateRequired('GUILD_ID', process.env.GUILD_ID),
     roleName: validateOptionalString(process.env.PALSERVER_ROLE_NAME) || 'palserver',
-    announceChannelId: validateOptionalString(process.env.ANNOUNCE_CHANNEL_ID)
+    announceChannelId: validateOptionalString(process.env.ANNOUNCE_CHANNEL_ID),
+    hostActorName: validateOptionalString(process.env.HOST_ACTOR_NAME) || 'Host'
   },
 
   // Palworld REST API Configuration
