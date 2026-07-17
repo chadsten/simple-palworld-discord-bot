@@ -44,6 +44,23 @@ function formatUptime(seconds) {
 }
 
 /**
+ * Formats player names as a bulleted list capped to Discord's 1024-character
+ * embed field limit, ending with "…and N more" when truncated
+ * @param {Array<object>} players - Player records from the Palworld API
+ * @returns {string} Bulleted player name list
+ */
+function formatPlayerList(players) {
+  // Handle multiple possible player name formats from different Palworld versions
+  const lines = players.map(p => `• ${p.name ?? p.playerName ?? 'Unknown'}`);
+  let list = lines.join('\n');
+  while (list.length > 1024) {
+    lines.pop();
+    list = `${lines.join('\n')}\n…and ${players.length - lines.length} more`;
+  }
+  return list;
+}
+
+/**
  * Creates a server status embed with current server information
  * @param {string} title - Title for the embed (e.g., "Server Status", "Server Started")
  * @param {string} color - Hex color for the embed (optional, defaults to '#00ff00' for green)
@@ -51,7 +68,7 @@ function formatUptime(seconds) {
  */
 async function createServerStatusEmbed(title, color = '#00ff00') {
   const [info, metrics, players] = await Promise.all([getInfo(), getMetrics(), getPlayers()]);
-  
+
   const embed = new EmbedBuilder()
     .setTitle(`${info.servername || 'Palworld'} ${title}`)
     .addFields(
@@ -61,7 +78,12 @@ async function createServerStatusEmbed(title, color = '#00ff00') {
       { name: 'Uptime', value: `${formatUptime(metrics.uptime || 0)}`, inline: true }
     )
     .setColor(color);
-  
+
+  // Name who's online; omitted at 0 players so post-start/post-bounce embeds stay unchanged
+  if (players.length > 0) {
+    embed.addFields({ name: 'Online', value: formatPlayerList(players), inline: false });
+  }
+
   return embed;
 }
 
@@ -138,10 +160,7 @@ client.on('interactionCreate', async (interaction) => {
         if (!(await requireServerUp(interaction))) return;
         
         const players = await getPlayers();
-        // Handle multiple possible player name formats from different Palworld versions
-        const list = players.length
-          ? players.map(p => `• ${p.name ?? p.playerName ?? 'Unknown'}`).join('\n')
-          : 'No players online.';
+        const list = players.length ? formatPlayerList(players) : 'No players online.';
         return interaction.editReply(list);
       }
 
