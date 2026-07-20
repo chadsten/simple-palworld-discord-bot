@@ -2,13 +2,14 @@
  * Shared log-file utilities
  *
  * Plumbing for writing runtime logs to a `logs/` folder beside the running
- * process (the launch folder, `process.cwd()` - stable at runtime, so the exe
- * and `node src/main.js` both land here). Provides directory setup, path
+ * process (the launch folder resolved by getBaseDir, so the exe and
+ * `node src/main.js` both land here). Provides directory setup, path
  * resolution, and size-based rollover. All helpers are best-effort: a logging
  * failure must never crash the bot or the game server it manages.
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { getBaseDir } from './paths.js';
 
 /**
  * Maximum size a log file may reach before rollover (5 MB).
@@ -20,7 +21,7 @@ export const MAX_LOG_BYTES = 5 * 1024 * 1024;
  * @returns {string} Resolved logs directory path
  */
 export function getLogDir() {
-  return path.join(process.cwd(), 'logs');
+  return path.join(getBaseDir(), 'logs');
 }
 
 /**

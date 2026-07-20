@@ -5,6 +5,7 @@ import { getInfo, getPlayers, getMetrics, isUp } from './palworld.js';
 import { startMonitoring } from './monitor.js';
 import { sanitizeErrorMessage } from './utils/security.js';
 import { createLogger } from './utils/logger.js';
+import { safeReply } from './utils/interactions.js';
 import { checkAuthorization } from './middleware/auth.js';
 import { gracefulShutdown, doStart, doStop, doBounce } from './actions.js';
 import config from './config/index.js';
@@ -14,13 +15,39 @@ const client = new Client({ intents: [GatewayIntentBits.Guilds], partials: [Part
 
 
 /**
+ * Discord API error codes returned when an interaction's 15-minute token has
+ * expired - the webhook backing it is gone, so no further edit can land.
+ */
+const EXPIRED_INTERACTION_CODES = [10015, 50027];
+
+/**
+ * editReply that tolerates an expired interaction token.
+ *
+ * A rejected editReply is unrecoverable and, because discord.js never awaits the
+ * interactionCreate listener, would surface as an unhandled rejection - which
+ * main.js treats as fatal and exits on, killing the bot over a late reply. Only
+ * the expired-token codes are swallowed; every other failure still propagates.
+ * @param {import('discord.js').ChatInputCommandInteraction} interaction
+ * @param {string|import('discord.js').InteractionEditReplyOptions} payload - editReply payload
+ * @returns {Promise<*>} The edited message, or undefined when the token had expired
+ */
+async function safeEdit(interaction, payload) {
+  try {
+    return await interaction.editReply(payload);
+  } catch (err) {
+    if (!EXPIRED_INTERACTION_CODES.includes(err?.code)) throw err;
+    logger.warn(`Interaction token expired for /${interaction.commandName}; reply dropped`);
+  }
+}
+
+/**
  * Helper function to check server status and return early if down
  * Reduces code duplication across multiple commands that require server to be running
  */
 async function requireServerUp(interaction) {
   const up = await isUp();
   if (!up) {
-    await interaction.editReply('Server appears **DOWN**.');
+    await safeEdit(interaction, 'Server appears **DOWN**.');
     return false;
   }
   return true;
@@ -101,13 +128,13 @@ async function replyWithResult(interaction, result, embedFallbackMessage) {
     // Check if API is responding and show status if available
     try {
       const embed = await createServerStatusEmbed(result.embedTitle);
-      return interaction.editReply({ content: result.message, embeds: [embed] });
+      return safeEdit(interaction, { content: result.message, embeds: [embed] });
     } catch {
       // API not responding yet, fall back to simple message
-      return interaction.editReply(embedFallbackMessage);
+      return safeEdit(interaction, embedFallbackMessage);
     }
   }
-  return interaction.editReply(result.message);
+  return safeEdit(interaction, result.message);
 }
 
 client.once('ready', async () => {
@@ -148,7 +175,7 @@ client.on('interactionCreate', async (interaction) => {
         if (!(await requireServerUp(interaction))) return;
         
         const embed = await createServerStatusEmbed('Server Status');
-        return interaction.editReply({ embeds: [embed] });
+        return safeEdit(interaction, { embeds: [embed] });
       }
 
       case 'palplayers': {
@@ -161,7 +188,7 @@ client.on('interactionCreate', async (interaction) => {
         
         const players = await getPlayers();
         const list = players.length ? formatPlayerList(players) : 'No players online.';
-        return interaction.editReply(list);
+        return safeEdit(interaction, list);
       }
 
       case 'palstart': {
@@ -182,7 +209,7 @@ client.on('interactionCreate', async (interaction) => {
 
         // Shared action owns the lock + graceful stop; message matches gracefulShutdown.
         const r = await doStop({ actor: interaction.user.username });
-        return interaction.editReply(r.message);
+        return safeEdit(interaction, r.message);
       }
 
       case 'palbounce': {
@@ -194,7 +221,7 @@ client.on('interactionCreate', async (interaction) => {
         // intermediate "Restarting in Ns..." message via editReply, preserving UX.
         const r = await doBounce({
           actor: interaction.user.username,
-          onProgress: (m) => interaction.editReply(m)
+          onProgress: (m) => safeEdit(interaction, m)
         });
         return replyWithResult(interaction, r, 'Bounce complete. Server should be up shortly.');
       }
@@ -212,7 +239,7 @@ client.on('interactionCreate', async (interaction) => {
             { name: '/palbounce', value: 'Graceful stop, wait, then restart the server', inline: false },
           )
           .setColor('#808080');
-        return interaction.reply({ embeds: [embed] });
+        return safeReply(interaction, { embeds: [embed] });
       }
 
     }
@@ -225,9 +252,9 @@ client.on('interactionCreate', async (interaction) => {
     // Handle both deferred and non-deferred interactions appropriately
     // Deferred interactions require editReply, while others use reply
     if (interaction.deferred || interaction.replied) {
-      return interaction.editReply('Unexpected error. Check bot logs.');
+      return safeEdit(interaction, 'Unexpected error. Check bot logs.');
     } else {
-      return interaction.reply({ content: 'Unexpected error. Check bot logs.', ephemeral: true });
+      return safeReply(interaction, { content: 'Unexpected error. Check bot logs.', ephemeral: true });
     }
   }
 });

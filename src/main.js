@@ -23,8 +23,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import dotenv from 'dotenv';
 import { healEnv } from './env-heal.js';
 import { createLogger } from './utils/logger.js';
+import { getBaseDir } from './utils/paths.js';
 
 /**
  * Pops a native Windows message box so a windowless (GUI-subsystem) exe can
@@ -71,7 +73,7 @@ function pauseIfInteractive(exitCode = 1) {
  * @returns {boolean} True if this was a first run and startup must not proceed.
  */
 function bootstrapFirstRun() {
-  const envPath = path.join(process.cwd(), '.env');
+  const envPath = path.join(getBaseDir(), '.env');
   if (fs.existsSync(envPath)) return false;
 
   // The template ships beside the repo root and is bundled into the packaged
@@ -99,7 +101,7 @@ function bootstrapFirstRun() {
 
   // Also drop the template alongside as a reference, but never clobber one the
   // user may have already customised.
-  const examplePath = path.join(process.cwd(), '.env.example');
+  const examplePath = path.join(getBaseDir(), '.env.example');
   if (!fs.existsSync(examplePath)) fs.writeFileSync(examplePath, template);
 
   process.stdout.write('\n========================================\n');
@@ -173,10 +175,10 @@ if (!bootstrapFirstRun()) {
   // A real .env exists - restore any keys this build knows about that the user's
   // .env is missing, appending them (with comments and example defaults) from the
   // bundled template. Best-effort: a heal failure must never block boot. Runs
-  // before ./index.js so dotenv, loaded downstream, picks up the seeded values.
+  // before the dotenv load below so it picks up the restored values.
   try {
     const { healed } = healEnv(
-      path.join(process.cwd(), '.env'),
+      path.join(getBaseDir(), '.env'),
       fileURLToPath(new URL('../.env.example', import.meta.url))
     );
     if (healed.length > 0) {
@@ -185,6 +187,13 @@ if (!bootstrapFirstRun()) {
       );
     }
   } catch { /* self-heal is best-effort; never let it block startup */ }
+
+  // Load the .env from the launch folder explicitly. ./index.js and its imports
+  // pull in `dotenv/config`, which only ever looks in process.cwd() - the wrong
+  // folder when the bot is started by Task Scheduler or a shortcut with no
+  // "Start in". dotenv never overwrites a key already in process.env, so those
+  // downstream default-path loads become harmless no-ops.
+  dotenv.config({ path: path.join(getBaseDir(), '.env') });
 
   try {
     // Dynamic import defers config loading into this try block so an import-time

@@ -115,11 +115,14 @@ function validateExecutablePath(executablePath) {
     throw new Error('Executable path must be between 1 and 260 characters');
   }
   
-  // Prevent dangerous characters and patterns
+  // Prevent dangerous characters and patterns. Parentheses are deliberately NOT
+  // rejected: they are legal and common in Windows paths ("C:\Program Files
+  // (x86)\..."), and the path never reaches a shell - it is embedded as a quoted
+  // token in the generated `cmd /c "..."` line. Arguments keep the stricter set.
   const dangerousPatterns = [
     /[<>"|*?]/,           // Windows dangerous chars
     /\.\./,               // Directory traversal
-    /[;&|`$()]/,          // Shell injection chars
+    /[;&|`$]/,            // Shell injection chars
     /\b(cmd|powershell|bash|sh)\b|\/bin\/(sh|bash)/i,  // Shell executables
     /\s*(-|\/)(c|command|exec)\s+/i,       // Shell command flags
   ];
@@ -211,9 +214,11 @@ export function validateWorkingDirectory(cwd) {
   // Reject control chars (CR/LF/tab/etc.) that would inject VBScript lines, and
   // the shell metacharacters the other validators block. The double quote is
   // included because the path is embedded as a double-quoted VBScript literal.
+  // Parentheses are allowed for the same reason as in validateExecutablePath:
+  // they are legal in Windows paths and carry no meaning in a VBScript literal.
   const dangerousPatterns = [
     /[\x00-\x1f]/,        // Control characters (newline/CR/tab/etc.)
-    /[;&|`$()"<>|*?]/,    // Shell metacharacters and Windows-invalid path chars
+    /[;&|`$"<>|*?]/,      // Shell metacharacters and Windows-invalid path chars
   ];
 
   for (const pattern of dangerousPatterns) {
