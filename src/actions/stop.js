@@ -123,7 +123,10 @@ export async function doStop({ actor, originChannelId } = {}) {
  *   true and, when false, suppresses doKill's own announce-channel line so a
  *   wrapping caller can post a single summary of its own
  * @returns {Promise<{success: boolean, message: string, forced: boolean}>} forced
- *   tells callers whether the stop escalated, so they need not parse the message
+ *   tells callers whether the stop escalated, so they need not parse the message. A
+ *   server already down on entry (or one that died in the gap just before the force
+ *   kill) is a success with forced:false and posts no announcement, since this call
+ *   stopped nothing
  */
 export async function doKill({ actor, originChannelId, message = 'Server is shutting down.', announce = true } = {}) {
   let stoppedCleanly = false;
@@ -150,7 +153,26 @@ export async function doKill({ actor, originChannelId, message = 'Server is shut
 
   const result = await killServerByName();
   if (!result.killed) {
-    // The reason already explains the launcher-misconfiguration case in full.
+    // killServerByName reports nothing killed in two genuinely-DOWN states as well
+    // as in the real failure: the server was already down when doKill ran (isUp()
+    // was false, the polite block was skipped, stoppedCleanly stayed false, and
+    // taskkill then found no process), or a clean shutdown finished in the gap after
+    // the stopTimeoutMs window but before taskkill ran. Re-confirm actual state
+    // before calling it a failure. A SINGLE serverIsFullyDown() check suffices, not
+    // a waitFor poll: killServerByName already proved no process exists, so there is
+    // nothing to wait to disappear - the only open question is whether REST is also
+    // silent, which one check answers.
+    if (await serverIsFullyDown()) {
+      // Genuinely down (already-down, or died in the gap): the goal is already met,
+      // so this is a success, not a failure. Post NO announcement - THIS call
+      // stopped nothing, and a "force-killed"/"cleanly stopped by ${actor}" line
+      // would be a lie.
+      await setServerDown();
+      return { success: true, message: 'Server is already down.', forced: false };
+    }
+    // The server is still responding, so the derived image name never matched a real
+    // process - the launcher-misconfiguration failure this message was written for.
+    // The reason already explains that case in full.
     return { success: false, message: `Force stop failed: ${result.reason}`, forced: true };
   }
 
