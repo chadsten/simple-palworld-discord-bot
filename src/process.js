@@ -7,7 +7,9 @@ import { validateServiceName, validateStartCommand, validateWorkingDirectory, sa
 import { waitFor, sleep } from './utils/async.js';
 import { ensureLogDir, logPath, rolloverIfLarge, MAX_LOG_BYTES } from './utils/logfiles.js';
 import { createLogger } from './utils/logger.js';
-import { recordServerPid } from './servercontrol.js';
+import { recordServerPid, getTrackedServerPid, isPidAlive } from './servercontrol.js';
+import { announceServerEvent } from './monitor.js';
+import { runSteamUpdate } from './steamupdate.js';
 import config from './config/index.js';
 
 const logger = createLogger('Process');
@@ -33,10 +35,24 @@ const LAUNCH_PID_FILE = '.launchpid';
 const PID_WAIT_TIMEOUT_MS = 5000;
 const PID_POLL_INTERVAL_MS = 100;
 
-export async function startServer() {
+/**
+ * Starts the game server, optionally running a best-effort SteamCMD update first.
+ * The onProgress sink (when provided) surfaces the coarse "checking for updates"
+ * message; the tray path passes none. Returns { started, updateWarning? } where
+ * updateWarning is a short line the caller appends to its reply when an update
+ * check failed but the server was started anyway.
+ * @param {{ onProgress?: (message: string) => (void|Promise<void>) }} [options]
+ * @returns {Promise<{started: boolean, reason?: string, updateWarning?: string|null}>}
+ */
+export async function startServer({ onProgress } = {}) {
   try {
     const already = await isUp();
     if (already) return { started: false, reason: 'already_running' };
+
+    // Best-effort SteamCMD update before launch. The isUp() guard above proves the
+    // server isn't answering REST, so it can't hold the install files open - the
+    // precondition for SteamCMD to replace them. Never blocks the start.
+    const updateWarning = await maybeRunUpdate(onProgress);
 
     const serviceName = config.server.serviceName;
     const startCmd = config.server.startCommand;
@@ -59,13 +75,53 @@ export async function startServer() {
 
     const ok = await waitFor(async () => await isUp(), config.timing.startTimeoutMs, config.timing.pollIntervalMs);
     if (!ok) throw new Error('Server did not come up in time');
-    return { started: true };
+    return { started: true, updateWarning };
   } catch (error) {
     const sanitizedMessage = sanitizeErrorMessage(error);
     const sanitizedError = new Error(sanitizedMessage);
     sanitizedError.name = error.name;
     throw sanitizedError;
   }
+}
+
+/**
+ * Runs the best-effort SteamCMD update-on-start before launch, when enabled.
+ * Returns a short warning string to append to the caller's reply when the update
+ * did NOT succeed, or null when it was skipped or succeeded. Never throws: an
+ * update problem must never block the server start.
+ *
+ * Skipped (returns null) when UPDATE_ON_START is off or STEAMCMD_PATH is unset,
+ * and also when a tracked server process is still alive - isUp() probes the REST
+ * API, but a hung/zombie server that stopped answering REST can still hold the
+ * file locks SteamCMD needs, so we never update while any server process lives.
+ * On failure it surfaces loudly in bot.log and the announce channel here, and
+ * returns the warning for the Discord reply.
+ * @param {(message: string) => (void|Promise<void>)} [onProgress] - Coarse progress sink
+ * @returns {Promise<string|null>} Warning text for a failed update, else null
+ */
+async function maybeRunUpdate(onProgress) {
+  if (!config.steam.updateOnStart || !config.steam.steamcmdPath) {
+    logger.debug('Update-on-start disabled or STEAMCMD_PATH unset; skipping update');
+    return null;
+  }
+
+  const trackedPid = getTrackedServerPid();
+  if (trackedPid !== null && isPidAlive(trackedPid)) {
+    logger.warn(`Skipping SteamCMD update: server process ${trackedPid} still alive (REST may be unresponsive)`);
+    return null;
+  }
+
+  const result = await runSteamUpdate({ onProgress });
+  if (result.ok) {
+    logger.info(result.updated ? 'SteamCMD update applied' : 'Server already up to date');
+    return null;
+  }
+
+  // Best-effort: start on the current build and surface the failure loudly - here
+  // in bot.log and the announce channel; the returned line goes to the reply.
+  logger.warn(`SteamCMD update failed: ${result.reason}`);
+  await announceServerEvent('⚠️ Server update check failed — starting on the current build. See logs.');
+  return '⚠️ Update check failed — starting on the current build. See logs.';
 }
 
 /**

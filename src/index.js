@@ -198,7 +198,11 @@ client.on('interactionCreate', async (interaction) => {
 
         // Shared action owns the lock + start orchestration; this command just
         // renders the result (embed on success, plain message otherwise).
-        const r = await doStart({ actor: interaction.user.username });
+        // onProgress surfaces the update-on-start "checking for updates" line.
+        const r = await doStart({
+          actor: interaction.user.username,
+          onProgress: (m) => safeEdit(interaction, m)
+        });
         return replyWithResult(interaction, r, 'Launch requested. Server should be up shortly.');
       }
 

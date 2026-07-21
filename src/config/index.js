@@ -67,6 +67,29 @@ function validateOptionalString(value) {
   return value ? value.trim() : null;
 }
 
+/**
+ * Validates a boolean-like environment value. Accepts real booleans and the
+ * case-insensitive strings "true"/"false" (surrounding whitespace tolerated), and
+ * uses the supplied default when the value is unset or empty. Any other value is
+ * rejected, matching the module's fail-fast approach.
+ * @param {string} name - Environment variable name for error reporting
+ * @param {string|boolean|undefined} value - Value to parse
+ * @param {boolean} defaultValue - Value used when unset or empty
+ * @returns {boolean} Parsed boolean value
+ * @throws {Error} If value is present but not a recognized boolean
+ */
+function validateBoolean(name, value, defaultValue = false) {
+  if (value === undefined || value === null || String(value).trim() === '') {
+    return defaultValue;
+  }
+
+  const normalized = String(value).trim().toLowerCase();
+  if (normalized === 'true') return true;
+  if (normalized === 'false') return false;
+
+  throw new Error(`${name} must be true or false, got: ${value}`);
+}
+
 // Parse and validate all configuration values
 const config = {
   // Discord Bot Configuration
@@ -152,6 +175,39 @@ const config = {
       process.env.EMPTY_CHECK_THRESHOLD || '2',
       1,  // Minimum 1 check
       10  // Maximum 10 checks
+    )
+  },
+
+  // SteamCMD Update-on-Start Configuration
+  // No-op unless updateOnStart is true AND steamcmdPath is set.
+  steam: {
+    // Master switch: run a SteamCMD update check before every server start.
+    updateOnStart: validateBoolean('UPDATE_ON_START', process.env.UPDATE_ON_START, false),
+
+    // Absolute path to steamcmd.exe. Empty disables the feature entirely.
+    steamcmdPath: validateOptionalString(process.env.STEAMCMD_PATH),
+
+    // Steam app id of the Palworld dedicated server (2394010 is confirmed correct).
+    appId: validatePositiveInteger('STEAM_APP_ID', process.env.STEAM_APP_ID || '2394010'),
+
+    // Install directory SteamCMD updates into. Empty falls back to START_CWD.
+    installDir: validateOptionalString(process.env.STEAM_INSTALL_DIR),
+
+    // Kill the update if no SteamCMD output arrives for this long (default: 2 min).
+    // SteamCMD streams continuous progress, so silence means it wedged.
+    stallTimeoutMs: validatePositiveInteger(
+      'UPDATE_STALL_TIMEOUT_MS',
+      process.env.UPDATE_STALL_TIMEOUT_MS || '120000',
+      30000,   // Minimum 30 seconds
+      600000   // Maximum 10 minutes
+    ),
+
+    // Hard wall-clock cap on the whole update regardless of output (default: 30 min).
+    timeoutMs: validatePositiveInteger(
+      'UPDATE_TIMEOUT_MS',
+      process.env.UPDATE_TIMEOUT_MS || '1800000',
+      60000,    // Minimum 1 minute
+      3600000   // Maximum 1 hour
     )
   }
 };

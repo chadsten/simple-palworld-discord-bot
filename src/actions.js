@@ -92,11 +92,13 @@ export async function gracefulShutdown() {
 
 /**
  * Starts the server under the shared lock. Mirrors the /palstart core behaviour
- * and returns the same messages so the Discord command is unchanged.
- * @param {{ actor?: string }} [options] - actor is used only for the announcement
+ * and returns the same messages so the Discord command is unchanged. onProgress
+ * surfaces the coarse "checking for updates" line from the update-on-start check.
+ * @param {{ actor?: string, onProgress?: (message: string) => (void|Promise<void>) }} [options]
+ *   actor is used only for the announcement
  * @returns {Promise<{success: boolean, message: string, embedTitle?: string}>}
  */
-export async function doStart({ actor } = {}) {
+export async function doStart({ actor, onProgress } = {}) {
   try {
     return await withLock(async () => {
       const up = await isUp();
@@ -105,7 +107,7 @@ export async function doStart({ actor } = {}) {
       }
 
       try {
-        await startServer();
+        const { updateWarning } = await startServer({ onProgress });
 
         // Notify monitor that server is now up
         await setServerUp();
@@ -113,7 +115,11 @@ export async function doStart({ actor } = {}) {
         // Announce the successful, explicitly-requested start
         await announceAction(actor, 'started');
 
-        return { success: true, message: 'Server started successfully!', embedTitle: 'Server Started' };
+        // Append the update-check warning (if any) so a failed update is visible.
+        const message = updateWarning
+          ? `Server started successfully!\n${updateWarning}`
+          : 'Server started successfully!';
+        return { success: true, message, embedTitle: 'Server Started' };
       } catch (e) {
         // Provide specific error feedback to help with troubleshooting
         const sanitizedMessage = sanitizeErrorMessage(e);
@@ -174,7 +180,7 @@ export async function doBounce({ actor, onProgress } = {}) {
       await sleep(config.timing.bounceDelayMs);
 
       try {
-        await startServer();
+        const { updateWarning } = await startServer({ onProgress });
 
         // Notify monitor that server is now up
         await setServerUp();
@@ -182,7 +188,11 @@ export async function doBounce({ actor, onProgress } = {}) {
         // Announce the successful, explicitly-requested restart
         await announceAction(actor, 'restarted');
 
-        return { success: true, message: 'Server restarted successfully!', embedTitle: 'Server Restarted' };
+        // Append the update-check warning (if any) so a failed update is visible.
+        const message = updateWarning
+          ? `Server restarted successfully!\n${updateWarning}`
+          : 'Server restarted successfully!';
+        return { success: true, message, embedTitle: 'Server Restarted' };
       } catch (e) {
         // Stop already completed, so surface the restart failure specifically
         return { success: false, message: `Restart failed after stop: \`${sanitizeErrorMessage(e)}\`` };

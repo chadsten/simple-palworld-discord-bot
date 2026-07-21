@@ -88,17 +88,17 @@ export function clearTrackedServerPid() {
 }
 
 /**
- * Force-kills the tracked server process TREE via `taskkill /F /T /PID <pid>`.
- * This is the destructive host-side action behind the tray "Kill Server" item.
- * It resolves the target PID from the pid file, verifies it is still alive, then
- * spawns taskkill (no shell, args array - injection-safe) and awaits its exit.
- * Never throws: always resolves to a result object describing the outcome.
+ * Force-kills a process TREE via `taskkill /F /T /PID <pid>` - no shell, PID as
+ * its own argv entry (injection-safe), /F forces, /T kills the whole tree. This
+ * is the shared primitive behind both the tray "Kill Server" and the SteamCMD
+ * update timeout kill. Never throws: always resolves to a structured result. Does
+ * NOT touch the pid file; callers tracking a persisted PID handle that themselves.
+ * @param {number} pid - Process ID whose tree should be force-killed
  * @returns {Promise<{killed: boolean, pid?: number, reason?: string}>} Kill result
  */
-export async function killServerTree() {
-  const pid = getTrackedServerPid();
-  if (pid === null || !isPidAlive(pid)) {
-    return { killed: false, reason: 'no tracked server process is running' };
+export function killTree(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) {
+    return Promise.resolve({ killed: false, reason: `invalid pid: ${pid}` });
   }
 
   return new Promise((resolve) => {
@@ -119,7 +119,6 @@ export async function killServerTree() {
 
       proc.on('close', (code) => {
         if (code === 0) {
-          clearTrackedServerPid();
           resolve({ killed: true, pid });
         } else {
           const reason = sanitizeErrorMessage(stderr || `taskkill exited with code ${code}`);
@@ -130,4 +129,24 @@ export async function killServerTree() {
       resolve({ killed: false, reason: sanitizeErrorMessage(error) });
     }
   });
+}
+
+/**
+ * Force-kills the tracked server process TREE via killTree(). This is the
+ * destructive host-side action behind the tray "Kill Server" item. It resolves
+ * the target PID from the pid file, verifies it is still alive, kills its tree,
+ * then clears the pid file on success. Never throws.
+ * @returns {Promise<{killed: boolean, pid?: number, reason?: string}>} Kill result
+ */
+export async function killServerTree() {
+  const pid = getTrackedServerPid();
+  if (pid === null || !isPidAlive(pid)) {
+    return { killed: false, reason: 'no tracked server process is running' };
+  }
+
+  const result = await killTree(pid);
+  if (result.killed) {
+    clearTrackedServerPid();
+  }
+  return result;
 }
