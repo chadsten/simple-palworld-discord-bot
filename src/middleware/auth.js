@@ -30,19 +30,31 @@ export function userHasPalserverRole(interaction) {
 }
 
 /**
+ * Shared guard body: denies with an ephemeral "you need <roleName>" reply when
+ * the caller fails the supplied check
+ * @param {import('discord.js').ChatInputCommandInteraction} interaction - Discord interaction
+ * @param {boolean} authorized - Whether the member passed the role check
+ * @param {string} roleName - Role name to name in the denial message
+ * @returns {boolean} True if authorized, false if unauthorized (and error sent)
+ */
+function requireRole(interaction, authorized, roleName) {
+  if (!authorized) {
+    // Fire-and-forget from this synchronous guard: safeReply swallows an expired
+    // interaction, and the trailing catch guards the floating promise so a
+    // transient reply failure can't surface as a fatal unhandledRejection.
+    safeReply(interaction, { content: `You need the \`${roleName}\` role to use this command.`, flags: MessageFlags.Ephemeral }).catch(() => {});
+    return false;
+  }
+  return true;
+}
+
+/**
  * Checks authorization and sends error response if unauthorized
  * @param {import('discord.js').ChatInputCommandInteraction} interaction - Discord interaction
  * @returns {boolean} True if authorized, false if unauthorized (and error sent)
  */
 export function checkAuthorization(interaction) {
-  if (!userHasPalserverRole(interaction)) {
-    // Fire-and-forget from this synchronous guard: safeReply swallows an expired
-    // interaction, and the trailing catch guards the floating promise so a
-    // transient reply failure can't surface as a fatal unhandledRejection.
-    safeReply(interaction, { content: `You need the \`${config.discord.roleName}\` role to use this command.`, flags: MessageFlags.Ephemeral }).catch(() => {});
-    return false;
-  }
-  return true;
+  return requireRole(interaction, userHasPalserverRole(interaction), config.discord.roleName);
 }
 
 /**
@@ -52,12 +64,6 @@ export function checkAuthorization(interaction) {
  * @returns {boolean} True if authorized, false if unauthorized (and error sent)
  */
 export function checkAdminAuthorization(interaction) {
-  if (!memberHasRole(interaction, config.discord.adminRoleName)) {
-    // Fire-and-forget from this synchronous guard: safeReply swallows an expired
-    // interaction, and the trailing catch guards the floating promise so a
-    // transient reply failure can't surface as a fatal unhandledRejection.
-    safeReply(interaction, { content: `You need the \`${config.discord.adminRoleName}\` role to use this command.`, flags: MessageFlags.Ephemeral }).catch(() => {});
-    return false;
-  }
-  return true;
+  const adminRoleName = config.discord.adminRoleName;
+  return requireRole(interaction, memberHasRole(interaction, adminRoleName), adminRoleName);
 }

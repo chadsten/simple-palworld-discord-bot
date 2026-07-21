@@ -5,7 +5,7 @@
  * concurrent triggers - multiple Discord users, the background monitor's
  * auto-stop, and the host-side tray "Commands" - can never interleave and leave
  * the server in a half-restarted state. This lives in its own module so both the
- * Discord entry point (index.js) and the shared actions (actions.js) import the
+ * shared actions (actions.js) and the background monitor (monitor.js) import the
  * exact same `busy` flag; duplicating it would silently split the lock in two.
  */
 

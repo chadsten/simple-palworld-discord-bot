@@ -234,10 +234,9 @@ export function validateWorkingDirectory(cwd) {
  * Sanitizes error messages to prevent information disclosure
  * Removes file paths, credentials, and other sensitive information
  * @param {Error|string} error - Error object or message to sanitize
- * @param {boolean} includeType - Whether to include error type in output
  * @returns {string} Sanitized error message safe for user display
  */
-export function sanitizeErrorMessage(error, includeType = false) {
+export function sanitizeErrorMessage(error) {
   let message = error instanceof Error ? error.message : String(error);
   
   // Remove file system paths (Windows and Unix style)
@@ -251,7 +250,8 @@ export function sanitizeErrorMessage(error, includeType = false) {
   message = message.replace(/auth[=:]\s*[^\s\n\r]+/gi, 'auth=[REDACTED]');
   
   // Remove environment variable values
-  message = message.replace(/\$[A-Za-z_][A-Za-z0-9_]*\s*=\s*[^\s\n\r]+/g, '$1=[REDACTED]');
+  // The leading $ is written $$ in the replacement so it survives as a literal
+  message = message.replace(/\$([A-Za-z_][A-Za-z0-9_]*)\s*=\s*[^\s\n\r]+/g, '$$$1=[REDACTED]');
   message = message.replace(/%[A-Za-z_][A-Za-z0-9_]*%/g, '[ENV_VAR]');
   
   // Remove IP addresses and ports
@@ -282,11 +282,6 @@ export function sanitizeErrorMessage(error, includeType = false) {
       break;
     }
   }
-  
-  // Include error type if requested and it's an Error object
-  if (includeType && error instanceof Error && error.name !== 'Error') {
-    return `${error.name}: ${message}`;
-  }
-  
+
   return message;
 }

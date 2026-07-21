@@ -2,10 +2,10 @@
  * Presentation helpers shared by the command handlers.
  *
  * Everything that turns server state into something Discord can render lives
- * here, so src/commandHandlers.js stays about command flow and src/index.js
+ * here, so the command modules in src/commands/ stay about command flow and src/index.js
  * stays about the client lifecycle.
  */
-import { EmbedBuilder } from 'discord.js';
+import { EmbedBuilder, escapeMarkdown } from 'discord.js';
 import { getInfo, getPlayers, getMetrics } from './palworld.js';
 import { safeEdit } from './utils/interactions.js';
 
@@ -34,8 +34,13 @@ export function formatUptime(seconds) {
  * @returns {string} Bulleted player name list
  */
 export function formatPlayerList(players) {
-  // Handle multiple possible player name formats from different Palworld versions
-  const lines = players.map(p => `• ${p.name ?? p.playerName ?? 'Unknown'}`);
+  // Handle multiple possible player name formats from different Palworld versions.
+  // Names are attacker-controlled by anyone who can join the server, so they are
+  // escaped before interpolation: maskedLink is off by default in discord.js and
+  // must be requested explicitly, otherwise a player called "[FREE PALS](url)"
+  // plants a clickable link in the embed. Escaping runs before the length check
+  // so the 1024 cap is measured against the text Discord actually receives.
+  const lines = players.map(p => `• ${escapeMarkdown(p.name ?? p.playerName ?? 'Unknown', { maskedLink: true })}`);
   let list = lines.join('\n');
   while (list.length > 1024) {
     lines.pop();

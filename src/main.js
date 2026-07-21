@@ -198,11 +198,12 @@ if (!bootstrapFirstRun()) {
     }
   } catch { /* self-heal is best-effort; never let it block startup */ }
 
-  // Load the .env from the launch folder explicitly. ./index.js and its imports
-  // pull in `dotenv/config`, which only ever looks in process.cwd() - the wrong
-  // folder when the bot is started by Task Scheduler or a shortcut with no
-  // "Start in". dotenv never overwrites a key already in process.env, so those
-  // downstream default-path loads become harmless no-ops.
+  // Load the .env from the launch folder explicitly, BEFORE the dynamic import of
+  // ./index.js below pulls in config/index.js and validates the environment. The
+  // default dotenv path is process.cwd() - the wrong folder when the bot is
+  // started by Task Scheduler or a shortcut with no "Start in" - so config must
+  // not be allowed to load until this explicit, base-dir load has run. Nothing
+  // main.js imports statically pulls in config/index.js, which keeps that order.
   dotenv.config({ path: path.join(getBaseDir(), '.env') });
 
   try {

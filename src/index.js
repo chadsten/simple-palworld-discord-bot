@@ -1,6 +1,5 @@
 import { Client, GatewayIntentBits, MessageFlags, REST, Routes } from 'discord.js';
-import { commandDefinitions } from './commands.js';
-import { commandHandlers } from './commandHandlers.js';
+import { commandDefinitions, commandHandlers } from './commands/index.js';
 import { startMonitoring } from './monitor.js';
 import { sanitizeErrorMessage } from './utils/security.js';
 import { createLogger } from './utils/logger.js';

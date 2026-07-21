@@ -146,14 +146,15 @@ async function runTrayCommand(label, action, { warnOnFailure = false } = {}) {
  */
 async function quit(tray, client) {
   logger.info('Quit requested from tray');
-  tray.kill();
   try {
     await client?.destroy?.();
   } catch (error) {
     logger.warn(`Error destroying Discord client on quit: ${sanitizeErrorMessage(error)}`);
   }
-  // Delay the exit so trayicon's helper 'exit' handler can clean the temp copy.
-  setTimeout(() => process.exit(0), TRAY_TEARDOWN_MS);
+  // Reuse the shared teardown so the TRAY_TEARDOWN_MS grace period lives in one
+  // place. The client is already destroyed above, so the exit it schedules is
+  // still after the Discord connection has been closed.
+  killTrayAndExit(tray);
 }
 
 /**

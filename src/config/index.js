@@ -12,7 +12,6 @@
  * - Fail-fast approach at startup
  * - Organized configuration categories
  */
-import 'dotenv/config';
 import { createLogger } from '../utils/logger.js';
 
 const logger = createLogger('Config');
