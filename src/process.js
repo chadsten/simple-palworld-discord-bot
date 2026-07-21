@@ -1,4 +1,3 @@
-import 'dotenv/config';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -23,16 +22,17 @@ const WSCRIPT_PATH = 'C:\\Windows\\System32\\wscript.exe';
 /**
  * Starts the game server, optionally running a best-effort SteamCMD update first.
  * The onProgress sink (when provided) surfaces the coarse "checking for updates"
- * message; the tray path passes none. Returns { started, updateWarning? } where
- * updateWarning is a short line the caller appends to its reply when an update
- * check failed but the server was started anyway.
+ * message; the tray path passes none. updateWarning is a short line the caller
+ * appends to its reply when an update check failed but the server was started
+ * anyway, and is null when the update was skipped, succeeded, or the server was
+ * already running.
  * @param {{ onProgress?: (message: string) => (void|Promise<void>) }} [options]
- * @returns {Promise<{started: boolean, reason?: string, updateWarning?: string|null}>}
+ * @returns {Promise<{updateWarning: string|null}>}
  */
 export async function startServer({ onProgress } = {}) {
   try {
     const already = await isUp();
-    if (already) return { started: false, reason: 'already_running' };
+    if (already) return { updateWarning: null };
 
     // Best-effort SteamCMD update before launch. The isUp() guard above proves the
     // server isn't answering REST, so it can't hold the install files open - the
@@ -45,7 +45,7 @@ export async function startServer({ onProgress } = {}) {
     if (serviceName) {
       // Validate service name before using it
       validateServiceName(serviceName);
-      await runSecurePowerShell('Start-Service', ['-Name', serviceName]);
+      await startWindowsService(serviceName);
     } else if (startCmd) {
       // Validate and parse start command, and the optional working directory,
       // before either reaches the generated launch VBScript.
@@ -60,7 +60,7 @@ export async function startServer({ onProgress } = {}) {
 
     const ok = await waitFor(async () => await isUp(), config.timing.startTimeoutMs, config.timing.pollIntervalMs);
     if (!ok) throw new Error('Server did not come up in time');
-    return { started: true, updateWarning };
+    return { updateWarning };
   } catch (error) {
     const sanitizedMessage = sanitizeErrorMessage(error);
     const sanitizedError = new Error(sanitizedMessage);
@@ -109,64 +109,41 @@ async function maybeRunUpdate(onProgress) {
 }
 
 /**
- * Secure PowerShell execution using parameterized commands
- * Prevents command injection by using separate command and arguments
- * @param {string} command - PowerShell command (e.g., 'Start-Service')
- * @param {string[]} args - Array of arguments to pass to the command
+ * Starts a Windows service via PowerShell (the SERVICE_NAME launch path).
+ *
+ * THE PARAMETER NAME MUST NOT BE QUOTED. `Start-Service '-Name' 'Foo'` binds a
+ * quoted -Name as a positional value, so PowerShell would try to start services
+ * literally named "-Name" and "Foo". Only the value is single-quoted, with any
+ * embedded single quote doubled - PowerShell's single-quoted literal escape.
+ * The name has already passed validateServiceName, so this quoting is defence in
+ * depth rather than the only guard. -ExecutionPolicy is deliberately not passed:
+ * it has no effect on a -Command invocation.
+ * @param {string} serviceName - Validated Windows service name
+ * @returns {Promise<void>} Resolves when the service start succeeds
  */
-async function runSecurePowerShell(command, args = []) {
+function startWindowsService(serviceName) {
   return new Promise((resolve, reject) => {
-    try {
-      // Validate command name (whitelist of allowed commands)
-      const allowedCommands = ['Start-Service', 'Stop-Service', 'Get-Service'];
-      if (!allowedCommands.includes(command)) {
-        reject(new Error('PowerShell command not allowed'));
-        return;
+    const command = `Start-Service -Name '${serviceName.replace(/'/g, "''")}'`;
+
+    // Nothing reads stdout, so it is discarded rather than piped into a buffer
+    // no one drains; stderr is kept because it carries the failure reason.
+    const ps = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], {
+      windowsHide: true,
+      stdio: ['ignore', 'ignore', 'pipe']
+    });
+
+    let stderr = '';
+    ps.stderr.on('data', d => (stderr += d.toString()));
+
+    ps.on('error', error => reject(new Error(sanitizeErrorMessage(error))));
+
+    ps.on('close', code => {
+      if (code === 0) {
+        resolve();
+      } else {
+        reject(new Error(sanitizeErrorMessage(stderr || `PowerShell exited with code ${code}`)));
       }
-
-      // Build the command string with proper escaping
-      const escapedArgs = args.map(arg => {
-        // Escape single quotes and wrap in single quotes for PowerShell
-        const escaped = arg.replace(/'/g, "''");
-        return `'${escaped}'`;
-      });
-      
-      const fullCommand = `${command} ${escapedArgs.join(' ')}`;
-      
-      const ps = spawn('powershell.exe', [
-        '-NoProfile',
-        '-NonInteractive', 
-        '-ExecutionPolicy', 'Bypass',
-        '-Command', fullCommand
-      ], { 
-        windowsHide: true,
-        stdio: ['ignore', 'pipe', 'pipe']
-      });
-
-      let stdout = '';
-      let stderr = '';
-      
-      ps.stdout.on('data', d => (stdout += d.toString()));
-      ps.stderr.on('data', d => (stderr += d.toString()));
-      
-      ps.on('close', code => {
-        if (code === 0) {
-          resolve(stdout.trim());
-        } else {
-          const sanitizedError = sanitizeErrorMessage(stderr || `PowerShell exited with code ${code}`);
-          reject(new Error(sanitizedError));
-        }
-      });
-
-      ps.on('error', error => {
-        const sanitizedError = sanitizeErrorMessage(error);
-        reject(new Error(sanitizedError));
-      });
-
-    } catch (error) {
-      const sanitizedError = sanitizeErrorMessage(error);
-      reject(new Error(sanitizedError));
-    }
+    });
   });
 }
 

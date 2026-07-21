@@ -127,24 +127,20 @@ export function isServerProcessRunning() {
 }
 
 /**
- * Force-kills a process TREE via `taskkill /F /T /PID <pid>` - no shell, PID as
- * its own argv entry (injection-safe), /F forces, /T kills the whole tree. Used
- * by the SteamCMD update timeout to kill a wedged steamcmd.exe child the bot
- * spawned itself, where a real Node child PID is available. Never throws: always
- * resolves to a structured result.
- * @param {number} pid - Process ID whose tree should be force-killed
- * @returns {Promise<{killed: boolean, pid?: number, reason?: string}>} Kill result
+ * Runs taskkill with the given argument list. taskkill lives on PATH; it is run
+ * without a shell with each argument as its own argv entry, so there is no
+ * injection surface and nothing needs quoting. Never throws: a spawn failure is
+ * reported as a null exit code with a sanitized reason, exactly like a non-zero
+ * exit, so callers only ever branch on `code`.
+ * @param {string[]} args - Full taskkill argument list
+ * @returns {Promise<{code: number|null, reason?: string}>} Exit code, plus a
+ *   sanitized failure reason whenever the kill did not succeed
+ * @private
  */
-export function killTree(pid) {
-  if (!Number.isInteger(pid) || pid <= 0) {
-    return Promise.resolve({ killed: false, reason: `invalid pid: ${pid}` });
-  }
-
+function runTaskkill(args) {
   return new Promise((resolve) => {
     try {
-      // taskkill lives on PATH; run without a shell and pass the PID as its own
-      // argv entry so there is no injection surface. /F forces, /T kills the tree.
-      const proc = spawn('taskkill', ['/F', '/T', '/PID', String(pid)], {
+      const proc = spawn('taskkill', args, {
         windowsHide: true,
         stdio: ['ignore', 'pipe', 'pipe']
       });
@@ -153,21 +149,37 @@ export function killTree(pid) {
       proc.stderr.on('data', (d) => (stderr += d.toString()));
 
       proc.on('error', (error) => {
-        resolve({ killed: false, reason: sanitizeErrorMessage(error) });
+        resolve({ code: null, reason: sanitizeErrorMessage(error) });
       });
 
       proc.on('close', (code) => {
         if (code === 0) {
-          resolve({ killed: true, pid });
+          resolve({ code });
         } else {
-          const reason = sanitizeErrorMessage(stderr || `taskkill exited with code ${code}`);
-          resolve({ killed: false, reason });
+          resolve({ code, reason: sanitizeErrorMessage(stderr || `taskkill exited with code ${code}`) });
         }
       });
     } catch (error) {
-      resolve({ killed: false, reason: sanitizeErrorMessage(error) });
+      resolve({ code: null, reason: sanitizeErrorMessage(error) });
     }
   });
+}
+
+/**
+ * Force-kills a process TREE via `taskkill /F /T /PID <pid>` - /F forces, /T
+ * kills the whole tree. Used by the SteamCMD update timeout to kill a wedged
+ * steamcmd.exe child the bot spawned itself, where a real Node child PID is
+ * available. Never throws: always resolves to a structured result.
+ * @param {number} pid - Process ID whose tree should be force-killed
+ * @returns {Promise<{killed: boolean, pid?: number, reason?: string}>} Kill result
+ */
+export async function killTree(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) {
+    return { killed: false, reason: `invalid pid: ${pid}` };
+  }
+
+  const { code, reason } = await runTaskkill(['/F', '/T', '/PID', String(pid)]);
+  return code === 0 ? { killed: true, pid } : { killed: false, reason };
 }
 
 /**
@@ -182,45 +194,20 @@ export function killTree(pid) {
  * Never throws.
  * @returns {Promise<{killed: boolean, image?: string, reason?: string}>} Kill result
  */
-export function killServerByName() {
+export async function killServerByName() {
   const image = getServerImageName();
   if (!image) {
-    return Promise.resolve({ killed: false, reason: 'no server image name available from START_CMD' });
+    return { killed: false, reason: 'no server image name available from START_CMD' };
   }
 
   const guard = assertKillableImageName(image);
   if (!guard.ok) {
-    return Promise.resolve({ killed: false, reason: guard.reason });
+    return { killed: false, reason: guard.reason };
   }
 
-  return new Promise((resolve) => {
-    try {
-      // Same shape as killTree: no shell, the image name as its own argv entry.
-      const proc = spawn('taskkill', ['/F', '/IM', image], {
-        windowsHide: true,
-        stdio: ['ignore', 'pipe', 'pipe']
-      });
-
-      let stderr = '';
-      proc.stderr.on('data', (d) => (stderr += d.toString()));
-
-      proc.on('error', (error) => {
-        resolve({ killed: false, reason: sanitizeErrorMessage(error) });
-      });
-
-      proc.on('close', (code) => {
-        if (code === 0) {
-          resolve({ killed: true, image });
-        } else if (code === 128) {
-          // taskkill's "process not found" code - nothing to kill is not an error.
-          resolve({ killed: false, reason: 'no matching server process is running' });
-        } else {
-          const reason = sanitizeErrorMessage(stderr || `taskkill exited with code ${code}`);
-          resolve({ killed: false, reason });
-        }
-      });
-    } catch (error) {
-      resolve({ killed: false, reason: sanitizeErrorMessage(error) });
-    }
-  });
+  const { code, reason } = await runTaskkill(['/F', '/IM', image]);
+  if (code === 0) return { killed: true, image };
+  // taskkill's "process not found" code - nothing to kill is not an error.
+  if (code === 128) return { killed: false, reason: 'no matching server process is running' };
+  return { killed: false, reason };
 }

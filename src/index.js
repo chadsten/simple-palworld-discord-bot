@@ -1,13 +1,11 @@
-import 'dotenv/config';
-import { Client, GatewayIntentBits, Partials, PermissionsBitField, EmbedBuilder, REST, Routes } from 'discord.js';
+import { Client, GatewayIntentBits, MessageFlags, REST, Routes } from 'discord.js';
 import { commandDefinitions } from './commands.js';
-import { getInfo, getPlayers, getMetrics, isUp, saveWorld, announce } from './palworld.js';
+import { commandHandlers } from './commandHandlers.js';
 import { startMonitoring } from './monitor.js';
 import { sanitizeErrorMessage } from './utils/security.js';
 import { createLogger } from './utils/logger.js';
-import { safeReply } from './utils/interactions.js';
-import { checkAuthorization, checkAdminAuthorization } from './middleware/auth.js';
-import { gracefulShutdown, doStart, doStop, doBounce, doKill, doScheduledRestart } from './actions.js';
+import { safeEdit, safeReply } from './utils/interactions.js';
+import { gracefulShutdown, doScheduledRestart } from './actions.js';
 import config from './config/index.js';
 
 const logger = createLogger('DiscordBot');
@@ -17,133 +15,8 @@ const logger = createLogger('DiscordBot');
 // guild using the BOT's permissions rather than the caller's.
 const client = new Client({
   intents: [GatewayIntentBits.Guilds],
-  partials: [Partials.Channel],
   allowedMentions: { parse: [] }
 });
-
-
-/**
- * Discord API error codes returned when an interaction's 15-minute token has
- * expired - the webhook backing it is gone, so no further edit can land.
- */
-const EXPIRED_INTERACTION_CODES = [10015, 50027];
-
-/**
- * editReply that tolerates an expired interaction token.
- *
- * A rejected editReply is unrecoverable and, because discord.js never awaits the
- * interactionCreate listener, would surface as an unhandled rejection - which
- * main.js treats as fatal and exits on, killing the bot over a late reply. Only
- * the expired-token codes are swallowed; every other failure still propagates.
- * @param {import('discord.js').ChatInputCommandInteraction} interaction
- * @param {string|import('discord.js').InteractionEditReplyOptions} payload - editReply payload
- * @returns {Promise<*>} The edited message, or undefined when the token had expired
- */
-async function safeEdit(interaction, payload) {
-  try {
-    return await interaction.editReply(payload);
-  } catch (err) {
-    if (!EXPIRED_INTERACTION_CODES.includes(err?.code)) throw err;
-    logger.warn(`Interaction token expired for /${interaction.commandName}; reply dropped`);
-  }
-}
-
-/**
- * Helper function to check server status and return early if down
- * Reduces code duplication across multiple commands that require server to be running
- */
-async function requireServerUp(interaction) {
-  const up = await isUp();
-  if (!up) {
-    await safeEdit(interaction, 'Server appears **DOWN**.');
-    return false;
-  }
-  return true;
-}
-/**
- * Convert uptime seconds to human-readable format (e.g., "2h 15m 30s")
- * @param {number} seconds - Uptime in seconds
- * @returns {string} Formatted uptime string
- */
-function formatUptime(seconds) {
-  const hours = Math.floor(seconds / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
-  const secs = seconds % 60;
-  
-  const parts = [];
-  if (hours > 0) parts.push(`${hours}h`);
-  if (minutes > 0) parts.push(`${minutes}m`);
-  if (secs > 0 || parts.length === 0) parts.push(`${secs}s`);
-  
-  return parts.join(' ');
-}
-
-/**
- * Formats player names as a bulleted list capped to Discord's 1024-character
- * embed field limit, ending with "…and N more" when truncated
- * @param {Array<object>} players - Player records from the Palworld API
- * @returns {string} Bulleted player name list
- */
-function formatPlayerList(players) {
-  // Handle multiple possible player name formats from different Palworld versions
-  const lines = players.map(p => `• ${p.name ?? p.playerName ?? 'Unknown'}`);
-  let list = lines.join('\n');
-  while (list.length > 1024) {
-    lines.pop();
-    list = `${lines.join('\n')}\n…and ${players.length - lines.length} more`;
-  }
-  return list;
-}
-
-/**
- * Creates a server status embed with current server information
- * @param {string} title - Title for the embed (e.g., "Server Status", "Server Started")
- * @param {string} color - Hex color for the embed (optional, defaults to '#00ff00' for green)
- * @returns {Promise<EmbedBuilder>} Server status embed
- */
-async function createServerStatusEmbed(title, color = '#00ff00') {
-  const [info, metrics, players] = await Promise.all([getInfo(), getMetrics(), getPlayers()]);
-
-  const embed = new EmbedBuilder()
-    .setTitle(`${info.servername || 'Palworld'} ${title}`)
-    .addFields(
-      { name: 'State', value: '**UP**', inline: true },
-      { name: 'Players', value: `${players.length}`, inline: true },
-      { name: 'Version', value: `${info.version || 'Unknown'}`, inline: true },
-      { name: 'Uptime', value: `${formatUptime(metrics.uptime || 0)}`, inline: true }
-    )
-    .setColor(color);
-
-  // Name who's online; omitted at 0 players so post-start/post-bounce embeds stay unchanged
-  if (players.length > 0) {
-    embed.addFields({ name: 'Online', value: formatPlayerList(players), inline: false });
-  }
-
-  return embed;
-}
-
-/**
- * Renders a shared-action result to a deferred interaction. On success with an
- * embedTitle it attaches a status embed (falling back to a plain message if the
- * API isn't ready yet to build one); otherwise it edits in the plain message.
- * @param {import('discord.js').ChatInputCommandInteraction} interaction
- * @param {{success: boolean, message: string, embedTitle?: string}} result - Action result
- * @param {string} embedFallbackMessage - Message to show if the embed can't be built
- * @returns {Promise<*>} The editReply result
- */
-async function replyWithResult(interaction, result, embedFallbackMessage) {
-  if (result.success && result.embedTitle) {
-    // Check if API is responding and show status if available
-    try {
-      const embed = await createServerStatusEmbed(result.embedTitle);
-      return safeEdit(interaction, { content: result.message, embeds: [embed] });
-    } catch {
-      // API not responding yet, fall back to simple message
-      return safeEdit(interaction, embedFallbackMessage);
-    }
-  }
-  return safeEdit(interaction, result.message);
-}
 
 client.once('ready', async () => {
   logger.info(`Bot logged in as ${client.user.tag}`);
@@ -175,146 +48,21 @@ client.on('interactionCreate', async (interaction) => {
   logger.info(`/${interaction.commandName} invoked by ${interaction.user.username} (${interaction.user.id})`);
 
   try {
-    switch (interaction.commandName) {
-      case 'palstatus': {
-        // Authorization check - only users with 'palserver' role can use any commands
-        if (!checkAuthorization(interaction)) return;
-        await interaction.deferReply();
-        
-        // Early return if server is down - reduces nesting and improves readability
-        if (!(await requireServerUp(interaction))) return;
-        
-        const embed = await createServerStatusEmbed('Server Status');
-        return safeEdit(interaction, { embeds: [embed] });
-      }
-
-      case 'palplayers': {
-        // Authorization check - only users with 'palserver' role can use any commands
-        if (!checkAuthorization(interaction)) return;
-        await interaction.deferReply();
-        
-        // Use helper function to reduce code duplication
-        if (!(await requireServerUp(interaction))) return;
-        
-        const players = await getPlayers();
-        const list = players.length ? formatPlayerList(players) : 'No players online.';
-        return safeEdit(interaction, list);
-      }
-
-      case 'palstart': {
-        // Authorization check - only users with 'palserver' role can start/stop server
-        if (!checkAuthorization(interaction)) return;
-        await interaction.deferReply();
-
-        // Shared action owns the lock + start orchestration; this command just
-        // renders the result (embed on success, plain message otherwise).
-        // onProgress surfaces the update-on-start "checking for updates" line.
-        const r = await doStart({
-          actor: interaction.user.username,
-          onProgress: (m) => safeEdit(interaction, m)
-        });
-        return replyWithResult(interaction, r, 'Launch requested. Server should be up shortly.');
-      }
-
-      case 'palstop': {
-        // Authorization check - only users with 'palserver' role can start/stop server
-        if (!checkAuthorization(interaction)) return;
-        await interaction.deferReply();
-
-        // Shared action owns the lock + graceful stop; message matches gracefulShutdown.
-        const r = await doStop({ actor: interaction.user.username });
-        return safeEdit(interaction, r.message);
-      }
-
-      case 'palbounce': {
-        // Authorization check - only users with 'palserver' role can start/stop server
-        if (!checkAuthorization(interaction)) return;
-        await interaction.deferReply();
-
-        // Shared action runs stop+wait+start under one lock; onProgress surfaces the
-        // intermediate "Restarting in Ns..." message via editReply, preserving UX.
-        const r = await doBounce({
-          actor: interaction.user.username,
-          onProgress: (m) => safeEdit(interaction, m)
-        });
-        return replyWithResult(interaction, r, 'Bounce complete. Server should be up shortly.');
-      }
-      case 'palhelp': {
-        // Authorization check - only users with 'palserver' role can use any commands
-        if (!checkAuthorization(interaction)) return;
-        
-        const embed = new EmbedBuilder()
-          .setTitle('Palworld Bot Commands')
-          .addFields(
-            { name: '/palstatus', value: 'Show server status and players', inline: false },
-            { name: '/palplayers', value: 'List current players', inline: false },
-            { name: '/palstart', value: 'Start the Palworld server', inline: false },
-            { name: '/palstop', value: 'Gracefully stop server when 0 players', inline: false },
-            { name: '/palbounce', value: 'Graceful stop, wait, then restart the server', inline: false },
-            { name: '/palannounce', value: 'Broadcast to in-game chat (admin)', inline: false },
-            { name: '/palsave', value: 'Force a world save (admin)', inline: false },
-            { name: '/palkill', value: 'Save the world, then stop the server even with players online, force-killing the process only if the clean shutdown fails (admin)', inline: false },
-          )
-          .setColor('#808080');
-        return safeReply(interaction, { embeds: [embed] });
-      }
-
-      case 'palannounce': {
-        // Admin authorization check - requires the 'palserver-admin' role specifically
-        if (!checkAdminAuthorization(interaction)) return;
-        await interaction.deferReply();
-
-        // Early return if server is down - the announce API needs a live server
-        if (!(await requireServerUp(interaction))) return;
-
-        const message = interaction.options.getString('message', true);
-        await announce(message);
-        return safeEdit(interaction, `Announced in-game: "${message}"`);
-      }
-
-      case 'palsave': {
-        // Admin authorization check - requires the 'palserver-admin' role specifically
-        if (!checkAdminAuthorization(interaction)) return;
-        await interaction.deferReply();
-
-        // Early return if server is down - the save API needs a live server
-        if (!(await requireServerUp(interaction))) return;
-
-        await saveWorld();
-        return safeEdit(interaction, 'World save triggered.');
-      }
-
-      case 'palkill': {
-        // Admin authorization check - requires the 'palserver-admin' role specifically
-        if (!checkAdminAuthorization(interaction)) return;
-        await interaction.deferReply();
-
-        // Deliberately NO requireServerUp: this is the escape hatch and must work
-        // even when the REST API is unresponsive. It is no longer an unconditional
-        // hard kill - it saves and asks the server to shut down first (which works
-        // with players online) and only force-kills if that does not take.
-        //
-        // That polite path can take the save settle plus the stop timeout, well
-        // over a minute, so surface an intermediate line the same way /palbounce
-        // does rather than leaving the deferred reply silent.
-        await safeEdit(interaction, 'Saving and stopping the server — will force-kill if that does not take...');
-        const r = await doKill({ actor: interaction.user.username });
-        return safeEdit(interaction, r.message);
-      }
-
-    }
+    const handler = commandHandlers[interaction.commandName];
+    if (!handler) return;
+    return await handler(interaction);
   } catch (err) {
     // Global error handler for all command interactions
     // Logs sanitized error details for debugging while providing user-friendly messages
     const sanitizedMessage = sanitizeErrorMessage(err);
     logger.error(`Command error: ${interaction.commandName} by ${interaction.user.tag} - ${sanitizedMessage}`);
-    
+
     // Handle both deferred and non-deferred interactions appropriately
     // Deferred interactions require editReply, while others use reply
     if (interaction.deferred || interaction.replied) {
       return safeEdit(interaction, 'Unexpected error. Check bot logs.');
     } else {
-      return safeReply(interaction, { content: 'Unexpected error. Check bot logs.', ephemeral: true });
+      return safeReply(interaction, { content: 'Unexpected error. Check bot logs.', flags: MessageFlags.Ephemeral });
     }
   }
 });

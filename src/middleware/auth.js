@@ -2,6 +2,7 @@
  * Centralized authorization middleware for Palworld Discord bot
  * Eliminates DRY violations by consolidating role checking logic
  */
+import { MessageFlags } from 'discord.js';
 import config from '../config/index.js';
 import { safeReply } from '../utils/interactions.js';
 
@@ -38,7 +39,7 @@ export function checkAuthorization(interaction) {
     // Fire-and-forget from this synchronous guard: safeReply swallows an expired
     // interaction, and the trailing catch guards the floating promise so a
     // transient reply failure can't surface as a fatal unhandledRejection.
-    safeReply(interaction, { content: `You need the \`${config.discord.roleName}\` role to use this command.`, ephemeral: true }).catch(() => {});
+    safeReply(interaction, { content: `You need the \`${config.discord.roleName}\` role to use this command.`, flags: MessageFlags.Ephemeral }).catch(() => {});
     return false;
   }
   return true;
@@ -55,7 +56,7 @@ export function checkAdminAuthorization(interaction) {
     // Fire-and-forget from this synchronous guard: safeReply swallows an expired
     // interaction, and the trailing catch guards the floating promise so a
     // transient reply failure can't surface as a fatal unhandledRejection.
-    safeReply(interaction, { content: `You need the \`${config.discord.adminRoleName}\` role to use this command.`, ephemeral: true }).catch(() => {});
+    safeReply(interaction, { content: `You need the \`${config.discord.adminRoleName}\` role to use this command.`, flags: MessageFlags.Ephemeral }).catch(() => {});
     return false;
   }
   return true;

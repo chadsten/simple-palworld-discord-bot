@@ -6,7 +6,7 @@ name: Release
 #   git tag v1.1.0
 #   git push origin v1.1.0
 #
-# A few minutes later, palworld-discord-bot.exe is downloadable from the
+# A few minutes later, exos-palworld-bot.exe is downloadable from the
 # repository's Releases page.
 
 on:

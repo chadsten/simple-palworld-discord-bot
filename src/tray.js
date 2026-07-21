@@ -100,7 +100,8 @@ function restartBot(tray) {
 /**
  * Executes the forced server stop after the user confirms via the submenu.
  * Delegates to the shared doKill action (which updates monitor state and posts
- * the announcement) and logs its structured result.
+ * the announcement) through runTrayCommand, so it inherits the same guarantee
+ * that a failing action only logs and never escapes to crash the tray.
  *
  * doKill is no longer purely destructive: it saves the world and asks the server
  * to shut down first, and only force-kills when that does not take. The confirm
@@ -110,13 +111,7 @@ function restartBot(tray) {
  */
 async function confirmKillServer() {
   logger.warn('Kill Server confirmed from tray');
-  const result = await doKill({ actor: config.discord.hostActorName });
-
-  if (result.success) {
-    logger.info(result.message);
-  } else {
-    logger.warn(result.message);
-  }
+  await runTrayCommand('Kill Server', doKill, { warnOnFailure: true });
 }
 
 /**
@@ -126,12 +121,18 @@ async function confirmKillServer() {
  * and its own announcement, so this wrapper only has to report the outcome.
  * @param {string} label - Human label for logging (e.g. 'Start Server')
  * @param {(options: {actor: string}) => Promise<{success: boolean, message: string}>} action - Shared action to run
+ * @param {{warnOnFailure?: boolean}} [options] - warnOnFailure logs an unsuccessful
+ *   result at WARN instead of INFO, for the destructive "Kill Server" path
  */
-async function runTrayCommand(label, action) {
+async function runTrayCommand(label, action, { warnOnFailure = false } = {}) {
   try {
     logger.info(`${label} requested from tray`);
     const result = await action({ actor: config.discord.hostActorName });
-    logger.info(result.message);
+    if (warnOnFailure && !result.success) {
+      logger.warn(result.message);
+    } else {
+      logger.info(result.message);
+    }
   } catch (error) {
     logger.error(`${label} failed from tray: ${sanitizeErrorMessage(error)}`);
   }

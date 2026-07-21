@@ -5,7 +5,6 @@
  * 
  * API Documentation: https://tech.palworldgame.com/optimize-game-balance/rest-api
  */
-import 'dotenv/config';
 import config from './config/index.js';
 
 // Base URL with trailing slash removed for consistent path construction

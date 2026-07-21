@@ -9,7 +9,6 @@
   },
   "scripts": {
     "dev": "node src/main.js",
-    "deploy-commands": "node deploy-commands.js",
     "build": "node scripts/brand-tray-exe.js && node scripts/make-ico.js && pkg . --output dist/exos-palworld-bot.exe && node scripts/set-exe-icon.js"
   },
   "pkg": {

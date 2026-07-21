@@ -135,10 +135,15 @@ const config = {
       60000  // Maximum 1 minute
     ),
     
-    // Grace period for server shutdown in seconds (default: 2 seconds)
+    // Grace period for server shutdown in seconds (default: 10 seconds). This is
+    // the waittime handed to REST /shutdown: the server broadcasts the message to
+    // in-game chat immediately, then waits this long before going down, so it is
+    // the players' last notice. 2 was fine when only the empty-server /palstop
+    // reached this path, but /palkill and the scheduled restart now stop with
+    // players connected. Keep in sync with .env.example.
     shutdownDelaySeconds: validatePositiveInteger(
       'SHUTDOWN_DELAY_SECONDS',
-      process.env.SHUTDOWN_DELAY_SECONDS || '2',
+      process.env.SHUTDOWN_DELAY_SECONDS || '10',
       0,     // Minimum 0 seconds (immediate)
       30     // Maximum 30 seconds
     ),

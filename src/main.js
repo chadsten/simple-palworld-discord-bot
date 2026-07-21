@@ -34,15 +34,25 @@ import { getBaseDir } from './utils/paths.js';
  * packaged exe stdout/stderr are a black hole. Shelled out via PowerShell to
  * avoid a native dependency; blocking, so the launch path waits for the click.
  * Best-effort: a dialog failure must never derail the exit path.
+ *
+ * NOTHING IS INTERPOLATED INTO THE SCRIPT. The body text comes from arbitrary
+ * error messages (handleFatal is wired to unhandledRejection), and PowerShell's
+ * double-quoted strings honour no backslash escaping while still expanding
+ * $(...) and $var - so any JS-side quoting is the wrong escaper. Both strings are
+ * handed over as environment variables and referenced as bare $env: expressions
+ * in expression position, which leaves no quoting problem to get wrong.
  * @param {string} title - Message box caption
  * @param {string} text - Message box body text
  */
 function showDialog(title, text) {
   try {
     spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-Command',
-      `Add-Type -AssemblyName System.Windows.Forms;` +
-      `[System.Windows.Forms.MessageBox]::Show(${JSON.stringify(text)}, ${JSON.stringify(title)}) | Out-Null`
-    ], { windowsHide: true });
+      'Add-Type -AssemblyName System.Windows.Forms;' +
+      '[System.Windows.Forms.MessageBox]::Show($env:PALBOT_DIALOG_TEXT, $env:PALBOT_DIALOG_TITLE) | Out-Null'
+    ], {
+      windowsHide: true,
+      env: { ...process.env, PALBOT_DIALOG_TEXT: text, PALBOT_DIALOG_TITLE: title }
+    });
   } catch { /* dialog is best-effort; never let it crash the exit path */ }
 }
 

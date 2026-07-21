@@ -1,6 +1,6 @@
-import 'dotenv/config';
 import { isUp, getPlayers, getInfo, getMetrics } from './palworld.js';
 import { armRestartCountdown, cancelRestartCountdown } from './autorestart.js';
+import { recordSample } from './perflog.js';
 import { sanitizeErrorMessage } from './utils/security.js';
 import { createLogger } from './utils/logger.js';
 import { logPath, rolloverIfLarge, MAX_LOG_BYTES } from './utils/logfiles.js';
@@ -139,18 +139,24 @@ async function performMonitorCheck(gracefulShutdownFn, performRestartFn = null) 
       await handleServerUp();
     }
 
-    // Scheduled auto-restart: this poll only DETECTS that uptime has entered the
-    // restart window; autorestart.js then arms precise one-shot timers for the
-    // in-game countdown. Isolated in its own try/catch so a /metrics hiccup costs
-    // nothing more than skipping this cycle - the auto-stop logic below must run
-    // regardless, and the next poll re-checks.
-    if (config.autoRestart.enabled && performRestartFn) {
-      try {
-        const metrics = await getMetrics();
+    // ONE /metrics sample per poll, feeding two consumers:
+    //   1. the FPS sample log, always - uptime, FPS and player count have to come
+    //      from the same response or the correlation the log exists for is lost;
+    //   2. scheduled auto-restart, when enabled and the action was injected. This
+    //      poll only DETECTS that uptime has entered the restart window;
+    //      autorestart.js then arms precise one-shot timers for the in-game
+    //      countdown.
+    // Isolated in its own try/catch so a /metrics hiccup costs nothing more than
+    // skipping this cycle - the auto-stop logic below must run regardless, and the
+    // next poll re-checks.
+    try {
+      const metrics = await getMetrics();
+      recordSample({ uptime: metrics.uptime, fps: metrics.serverfps, players: metrics.currentplayernum });
+      if (config.autoRestart.enabled && performRestartFn) {
         armRestartCountdown(metrics.uptime || 0, performRestartFn);
-      } catch (error) {
-        logger.warn(`Auto-restart check skipped: ${sanitizeErrorMessage(error)}`);
       }
+    } catch (error) {
+      logger.warn(`Metrics check skipped: ${sanitizeErrorMessage(error)}`);
     }
 
     // Server is up, check player count
@@ -177,7 +183,7 @@ async function performMonitorCheck(gracefulShutdownFn, performRestartFn = null) 
             // Reset counter after successful shutdown
             consecutiveEmptyChecks = 0;
             // Announce to the configured channel (best-effort, never throws)
-            await announce(`🛑 ${lastKnownServerName} auto-stopped — no players online.`);
+            await announceServerEvent(`🛑 ${lastKnownServerName} auto-stopped — no players online.`);
           } else {
             logger.warn(`Auto-stop failed: ${result.message}`);
             // Keep the counter if shutdown failed (maybe players joined during shutdown)
@@ -199,7 +205,7 @@ async function performMonitorCheck(gracefulShutdownFn, performRestartFn = null) 
     }
   } catch (error) {
     const sanitizedMessage = sanitizeErrorMessage(error);
-    logger.error('Error during monitoring check', { error: sanitizedMessage });
+    logger.error(`Error during monitoring check: ${sanitizedMessage}`);
     // Don't reset counter on errors, just log and continue
   }
 
@@ -265,27 +271,17 @@ async function updateDiscordStatus() {
     logger.info(`Discord status updated: ${activityName}`);
   } catch (error) {
     const sanitizedMessage = sanitizeErrorMessage(error);
-    logger.error('Failed to update Discord status', { error: sanitizedMessage });
+    logger.error(`Failed to update Discord status: ${sanitizedMessage}`);
   }
 }
 
 /**
- * Sends a message to the configured announcement channel
- * Best-effort: silently disabled when unconfigured, never throws
- * @param {string} message - Message to post to the channel
- * @private
- */
-/**
- * Public wrapper around the private announce() for callers outside the monitor
- * (e.g. the tray "Kill Server" action) that need to post to the announcement
- * channel. Best-effort and silent when unconfigured, mirroring announce().
+ * Sends a message to the configured announcement channel. Used by the monitor's
+ * own auto-stop line and by callers outside it (actions.js, process.js) that need
+ * to post there. Best-effort: silently disabled when unconfigured, never throws.
  * @param {string} message - Message to post to the channel
  */
 export async function announceServerEvent(message) {
-  await announce(message);
-}
-
-async function announce(message) {
   if (!config.discord.announceChannelId) {
     return;
   }
@@ -304,6 +300,6 @@ async function announce(message) {
     await channel.send(message);
   } catch (error) {
     const sanitizedMessage = sanitizeErrorMessage(error);
-    logger.warn('Failed to send announcement', { error: sanitizedMessage });
+    logger.warn(`Failed to send announcement: ${sanitizedMessage}`);
   }
 }

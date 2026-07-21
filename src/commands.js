@@ -2,8 +2,8 @@ import { SlashCommandBuilder } from 'discord.js';
 
 /**
  * Slash command definitions — single source of truth.
- * Imported by both the runtime registrar (src/index.js) and the manual
- * deploy script (deploy-commands.js).
+ * Imported by the runtime registrar (src/index.js) and by /palhelp, which
+ * generates its listing from these names and descriptions so it cannot drift.
  */
 export const commandDefinitions = [
   new SlashCommandBuilder()
@@ -38,4 +38,7 @@ export const commandDefinitions = [
   new SlashCommandBuilder()
     .setName('palkill')
     .setDescription('Stop the server even with players online, cleanly if possible, force if not (admin)'),
+  new SlashCommandBuilder()
+    .setName('palperf')
+    .setDescription('Server FPS trend from the current uptime window (admin)'),
 ].map(c => c.toJSON());
