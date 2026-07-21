@@ -24,4 +24,18 @@ export const commandDefinitions = [
   new SlashCommandBuilder()
     .setName('palhelp')
     .setDescription('Show all available Palworld commands'),
+  new SlashCommandBuilder()
+    .setName('palannounce')
+    .setDescription('Broadcast a message to in-game chat (admin)')
+    .addStringOption(o => o
+      .setName('message')
+      .setDescription('Text to announce to all players')
+      .setRequired(true)
+      .setMaxLength(200)),
+  new SlashCommandBuilder()
+    .setName('palsave')
+    .setDescription('Force a world save (admin)'),
+  new SlashCommandBuilder()
+    .setName('palkill')
+    .setDescription('Stop the server even with players online, cleanly if possible, force if not (admin)'),
 ].map(c => c.toJSON());

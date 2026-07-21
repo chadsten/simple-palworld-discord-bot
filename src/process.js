@@ -4,10 +4,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { isUp } from './palworld.js';
 import { validateServiceName, validateStartCommand, validateWorkingDirectory, sanitizeErrorMessage } from './utils/security.js';
-import { waitFor, sleep } from './utils/async.js';
+import { waitFor } from './utils/async.js';
 import { ensureLogDir, logPath, rolloverIfLarge, MAX_LOG_BYTES } from './utils/logfiles.js';
 import { createLogger } from './utils/logger.js';
-import { recordServerPid, getTrackedServerPid, isPidAlive } from './servercontrol.js';
+import { isServerProcessRunning } from './servercontrol.js';
 import { announceServerEvent } from './monitor.js';
 import { runSteamUpdate } from './steamupdate.js';
 import config from './config/index.js';
@@ -19,21 +19,6 @@ const logger = createLogger('Process');
  * to run the generated hidden-launch VBS so the game server gets no console window.
  */
 const WSCRIPT_PATH = 'C:\\Windows\\System32\\wscript.exe';
-
-/**
- * File name (inside logs/) the launch VBS writes the real server PID to, so the
- * bot can read it back and hand it to recordServerPid. Kept separate from the
- * canonical .serverpid file to avoid racing servercontrol's own reads/writes.
- */
-const LAUNCH_PID_FILE = '.launchpid';
-
-/**
- * How long to poll for the VBS-written PID before giving up (ms), and how often.
- * WMI Win32_Process.Create returns the PID synchronously inside the VBS, so this
- * is only covering wscript spawn + script execution latency - a few hundred ms.
- */
-const PID_WAIT_TIMEOUT_MS = 5000;
-const PID_POLL_INTERVAL_MS = 100;
 
 /**
  * Starts the game server, optionally running a best-effort SteamCMD update first.
@@ -91,9 +76,9 @@ export async function startServer({ onProgress } = {}) {
  * update problem must never block the server start.
  *
  * Skipped (returns null) when UPDATE_ON_START is off or STEAMCMD_PATH is unset,
- * and also when a tracked server process is still alive - isUp() probes the REST
- * API, but a hung/zombie server that stopped answering REST can still hold the
- * file locks SteamCMD needs, so we never update while any server process lives.
+ * and also when a server process is still alive - isUp() probes the REST API,
+ * but a hung/zombie server that stopped answering REST can still hold the file
+ * locks SteamCMD needs, so we never update while any server process lives.
  * On failure it surfaces loudly in bot.log and the announce channel here, and
  * returns the warning for the Discord reply.
  * @param {(message: string) => (void|Promise<void>)} [onProgress] - Coarse progress sink
@@ -105,9 +90,8 @@ async function maybeRunUpdate(onProgress) {
     return null;
   }
 
-  const trackedPid = getTrackedServerPid();
-  if (trackedPid !== null && isPidAlive(trackedPid)) {
-    logger.warn(`Skipping SteamCMD update: server process ${trackedPid} still alive (REST may be unresponsive)`);
+  if (await isServerProcessRunning()) {
+    logger.warn('Skipping SteamCMD update: a server process is still alive (REST may be unresponsive)');
     return null;
   }
 
@@ -196,12 +180,10 @@ async function runSecurePowerShell(command, args = []) {
  * and run it via wscript.exe (built into every Windows - no dependency).
  *
  * WMI launches the process independently of Node, so a Node fd can't be inherited
- * for logging and Node never sees the real PID. The VBS solves both: it launches
- * the server through `cmd /c "... >> palserver.log 2>&1"` (redirect performed by
- * the hidden cmd itself, keeping the same log the tray reads) and writes the real
- * PID that Create() returns to logs/.launchpid. The bot then polls that file and
- * records the PID via the canonical recordServerPid path, so the tray "Kill
- * Server" (taskkill /F /T /PID) still targets the real server process tree.
+ * for logging. The VBS solves that by launching the server through
+ * `cmd /c "... >> palserver.log 2>&1"`, with the redirect performed by the hidden
+ * cmd itself so the tray keeps reading the same log. Nothing here needs the
+ * launched PID: the server is killed by image name (see servercontrol.js).
  *
  * @param {string} executable - Path to the validated server executable
  * @param {string[]} args - Validated argument list
@@ -219,10 +201,6 @@ async function runSecureDetached(executable, args = [], cwd) {
   rolloverIfLarge(gameLogPath, MAX_LOG_BYTES);
 
   const vbsPath = logPath('launch-server.vbs');
-  const launchPidPath = logPath(LAUNCH_PID_FILE);
-
-  // Stale PID from a previous launch must not be mistaken for this one's.
-  try { fs.rmSync(launchPidPath, { force: true }); } catch {}
 
   // Build the hidden cmd command line and the VBS, then write it under the bot's
   // own logs/ directory before handing it to wscript. This is only as trustworthy
@@ -231,27 +209,10 @@ async function runSecureDetached(executable, args = [], cwd) {
   // the bot running from a trusted, non-world-writable location rather than an
   // ACL check here (out of scope for a physical-host-trust tool).
   const commandLine = buildHiddenCommandLine(executable, args, gameLogPath);
-  const vbs = buildLaunchVbs(commandLine, cwd, launchPidPath);
+  const vbs = buildLaunchVbs(commandLine, cwd);
   fs.writeFileSync(vbsPath, vbs);
 
   await spawnWscript(vbsPath);
-
-  // WMI returns the PID synchronously inside the VBS, but wscript runs
-  // asynchronously to us; poll briefly for the PID the VBS wrote.
-  const pid = await waitForLaunchedPid(launchPidPath);
-  if (pid === null) {
-    // Launch was still attempted (wscript ran the VBS); we just couldn't confirm
-    // the PID, so the tray "Kill Server" may not work for this instance. Surface
-    // it as a warning rather than failing - startServer's isUp() poll is the real
-    // success gate.
-    logger.warn('Could not read launched server PID; tree-kill may be unavailable');
-    return;
-  }
-
-  // Normalise through the canonical path so the pid file format matches exactly
-  // what getTrackedServerPid expects. Best-effort: never fails the launch.
-  recordServerPid(pid);
-  try { fs.rmSync(launchPidPath, { force: true }); } catch {}
 }
 
 /**
@@ -295,33 +256,30 @@ function vbsEscape(value) {
 
 /**
  * Generates the hidden-launch VBScript. It starts the given command through WMI
- * with a hidden window (SW_HIDE) and writes the created process PID to pidPath.
+ * with a hidden window (SW_HIDE) and then exits; the Create() return value is not
+ * inspected, because a failed launch is caught anyway - startServer's
+ * waitFor(isUp, startTimeoutMs) is the real success gate, and always was.
  * @param {string} commandLine - Full command line to launch (cmd /c "...")
  * @param {string} cwd - Working directory, or falsy for the caller's default
- * @param {string} pidPath - Absolute path the PID is written to on success
  * @returns {string} VBScript source
  */
-export function buildLaunchVbs(commandLine, cwd, pidPath) {
+export function buildLaunchVbs(commandLine, cwd) {
   // Null tells WMI to use the default working directory; otherwise a quoted path.
   const cwdLiteral = cwd ? `"${vbsEscape(path.win32.normalize(cwd))}"` : 'Null';
 
   return [
     'Option Explicit',
     'Const SW_HIDE = 0',
-    'Dim objWMI, objStartup, objConfig, objProcess, intPID, errReturn',
+    'Dim objWMI, objStartup, objConfig, objProcess, intPID',
     'Set objWMI = GetObject("winmgmts:{impersonationLevel=impersonate}!\\\\.\\root\\cimv2")',
     'Set objStartup = objWMI.Get("Win32_ProcessStartup")',
     'Set objConfig = objStartup.SpawnInstance_',
     'objConfig.ShowWindow = SW_HIDE',
     'Set objProcess = objWMI.Get("Win32_Process")',
-    `errReturn = objProcess.Create("${vbsEscape(commandLine)}", ${cwdLiteral}, objConfig, intPID)`,
-    'If errReturn = 0 Then',
-    '  Dim fso, f',
-    '  Set fso = CreateObject("Scripting.FileSystemObject")',
-    `  Set f = fso.CreateTextFile("${vbsEscape(pidPath)}", True)`,
-    '  f.Write intPID',
-    '  f.Close',
-    'End If',
+    // Call lets the parenthesised form stand without capturing a return value.
+    // intPID is still passed because Create's [out] PID parameter needs a
+    // declared variable under Option Explicit; nothing reads it back.
+    `Call objProcess.Create("${vbsEscape(commandLine)}", ${cwdLiteral}, objConfig, intPID)`,
     ''
   ].join('\r\n');
 }
@@ -353,7 +311,7 @@ function spawnWscript(vbsPath) {
       child.unref();
 
       // wscript is fire-and-forget; once spawned without an immediate error we
-      // hand control back and let the PID poll confirm the real launch.
+      // hand control back and let startServer's isUp() poll confirm the launch.
       if (!settled) {
         settled = true;
         resolve();
@@ -362,23 +320,4 @@ function spawnWscript(vbsPath) {
       reject(new Error(sanitizeErrorMessage(error)));
     }
   });
-}
-
-/**
- * Polls the launch PID file the VBS writes, returning the parsed PID once present
- * or null if it never appears within the timeout. Never throws.
- * @param {string} pidPath - Path the VBS writes the PID to
- * @returns {Promise<number|null>} The launched PID, or null on timeout
- */
-async function waitForLaunchedPid(pidPath) {
-  const until = Date.now() + PID_WAIT_TIMEOUT_MS;
-  while (Date.now() < until) {
-    try {
-      const raw = fs.readFileSync(pidPath, 'utf8').trim();
-      const pid = Number.parseInt(raw, 10);
-      if (Number.isInteger(pid) && pid > 0) return pid;
-    } catch {}
-    await sleep(PID_POLL_INTERVAL_MS);
-  }
-  return null;
 }

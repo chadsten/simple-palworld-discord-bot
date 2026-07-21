@@ -1,9 +1,9 @@
 import 'dotenv/config';
-import { isUp, getPlayers, getInfo } from './palworld.js';
+import { isUp, getPlayers, getInfo, getMetrics } from './palworld.js';
+import { armRestartCountdown, cancelRestartCountdown } from './autorestart.js';
 import { sanitizeErrorMessage } from './utils/security.js';
 import { createLogger } from './utils/logger.js';
 import { logPath, rolloverIfLarge, MAX_LOG_BYTES } from './utils/logfiles.js';
-import { clearTrackedServerPid } from './servercontrol.js';
 import { withLock } from './lock.js';
 import config from './config/index.js';
 import { ActivityType } from 'discord.js';
@@ -48,9 +48,10 @@ async function handleServerDown() {
     serverState = SERVER_STATE.KNOWN_DOWN;
     consecutiveEmptyChecks = 0;
     logger.info('Monitoring Paused');
-    // The tracked server process is gone, so drop its PID file to avoid a stale
-    // entry lingering for the tray "Kill Server" action. Best-effort.
-    clearTrackedServerPid();
+    // Any pending restart countdown belongs to the server instance that just
+    // went away - keeping it would restart a stopped server, or fire its
+    // warnings and restart against whatever gets started next.
+    cancelRestartCountdown('server is down');
     await updateDiscordStatus();
   }
 }
@@ -59,8 +60,12 @@ async function handleServerDown() {
  * Starts the background server monitoring system
  * @param {Function} gracefulShutdownFn - Function to call for graceful shutdown
  * @param {Client} client - Discord client for status updates
+ * @param {Function} performRestartFn - Optional scheduled-restart action
+ *   (actions.doScheduledRestart). Injected rather than imported for the same
+ *   reason as gracefulShutdownFn: actions.js imports this module, so importing
+ *   it here would close a cycle. Omitting it disables the auto-restart arming.
  */
-export async function startMonitoring(gracefulShutdownFn, client = null) {
+export async function startMonitoring(gracefulShutdownFn, client = null, performRestartFn = null) {
   discordClient = client;
   if (monitoringActive) {
     logger.info('Already active, skipping start');
@@ -86,15 +91,17 @@ export async function startMonitoring(gracefulShutdownFn, client = null) {
   }
   
   intervalId = setInterval(async () => {
-    await performMonitorCheck(gracefulShutdownFn);
+    await performMonitorCheck(gracefulShutdownFn, performRestartFn);
   }, config.monitoring.intervalMs);
 }
 
 /**
  * Performs a single monitoring check
  * @param {Function} gracefulShutdownFn - Function to call for graceful shutdown
+ * @param {Function} performRestartFn - Optional scheduled-restart action, armed
+ *   with the current uptime whenever the server is confirmed UP
  */
-async function performMonitorCheck(gracefulShutdownFn) {
+async function performMonitorCheck(gracefulShutdownFn, performRestartFn = null) {
   logger.debug('Starting monitor check');
 
   // The detached game process owns palserver.log directly, so the bot can't
@@ -131,6 +138,21 @@ async function performMonitorCheck(gracefulShutdownFn) {
       logger.info('Server is UP, updating state to KNOWN_UP');
       await handleServerUp();
     }
+
+    // Scheduled auto-restart: this poll only DETECTS that uptime has entered the
+    // restart window; autorestart.js then arms precise one-shot timers for the
+    // in-game countdown. Isolated in its own try/catch so a /metrics hiccup costs
+    // nothing more than skipping this cycle - the auto-stop logic below must run
+    // regardless, and the next poll re-checks.
+    if (config.autoRestart.enabled && performRestartFn) {
+      try {
+        const metrics = await getMetrics();
+        armRestartCountdown(metrics.uptime || 0, performRestartFn);
+      } catch (error) {
+        logger.warn(`Auto-restart check skipped: ${sanitizeErrorMessage(error)}`);
+      }
+    }
+
     // Server is up, check player count
     const players = await getPlayers();
     const playerCount = players.length;

@@ -21,9 +21,7 @@ import fs from 'node:fs';
 import { logPath, getLogDir, ensureLogDir } from './utils/logfiles.js';
 import { sanitizeErrorMessage } from './utils/security.js';
 import { createLogger } from './utils/logger.js';
-import { killServerTree } from './servercontrol.js';
-import { setServerDown, announceServerEvent } from './monitor.js';
-import { doStart, doStop, doBounce } from './actions.js';
+import { doStart, doStop, doBounce, doKill } from './actions.js';
 import config from './config/index.js';
 
 const require = createRequire(import.meta.url);
@@ -100,19 +98,24 @@ function restartBot(tray) {
 }
 
 /**
- * Executes the destructive server kill after the user confirms via the submenu.
- * On success it updates monitor state and posts a best-effort announcement.
+ * Executes the forced server stop after the user confirms via the submenu.
+ * Delegates to the shared doKill action (which updates monitor state and posts
+ * the announcement) and logs its structured result.
+ *
+ * doKill is no longer purely destructive: it saves the world and asks the server
+ * to shut down first, and only force-kills when that does not take. The confirm
+ * step still earns its keep - unlike "Stop Server" this stops the server even
+ * with players online, and can still end in a kill - but the logged result now
+ * says which of the two actually happened.
  */
 async function confirmKillServer() {
   logger.warn('Kill Server confirmed from tray');
-  const result = await killServerTree();
+  const result = await doKill({ actor: config.discord.hostActorName });
 
-  if (result.killed) {
-    logger.info(`Server process tree killed (PID ${result.pid})`);
-    await setServerDown();
-    await announceServerEvent('⚠️ The Palworld server was force-killed from the host.');
+  if (result.success) {
+    logger.info(result.message);
   } else {
-    logger.warn(`Kill Server did not run: ${result.reason}`);
+    logger.warn(result.message);
   }
 }
 
@@ -192,8 +195,9 @@ export async function startTray(client) {
   commands.add(tray.item('Reboot Server', () => { void runTrayCommand('Reboot Server', doBounce); }));
   commands.add(tray.item('Stop Server', () => { void runTrayCommand('Stop Server', doStop); }));
 
-  // "Kill Server" is destructive, so it lives behind a two-step submenu: the top
-  // item is inert and only its "Confirm Kill Server" child actually kills.
+  // "Kill Server" can end in a force kill and ignores the player count, so it
+  // lives behind a two-step submenu: the top item is inert and only its
+  // "Confirm Kill Server" child actually runs the stop.
   const killConfirm = tray.item('Confirm Kill Server', () => { void confirmKillServer(); });
   const killServer = tray.item('Kill Server');
   killServer.add(killConfirm);

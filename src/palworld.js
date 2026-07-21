@@ -62,6 +62,9 @@ export async function getMetrics() { return apiGet('/metrics'); }
 
 export async function saveWorld() { return apiPost('/save'); }
 
+/** Broadcasts a message to all players in in-game chat. */
+export async function announce(message) { return apiPost('/announce', { message }); }
+
 export async function shutdown(seconds = 0, message = 'Stopping...') {
   return apiPost('/shutdown', { waittime: seconds, message });
 }

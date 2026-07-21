@@ -1,17 +1,25 @@
 import 'dotenv/config';
 import { Client, GatewayIntentBits, Partials, PermissionsBitField, EmbedBuilder, REST, Routes } from 'discord.js';
 import { commandDefinitions } from './commands.js';
-import { getInfo, getPlayers, getMetrics, isUp } from './palworld.js';
+import { getInfo, getPlayers, getMetrics, isUp, saveWorld, announce } from './palworld.js';
 import { startMonitoring } from './monitor.js';
 import { sanitizeErrorMessage } from './utils/security.js';
 import { createLogger } from './utils/logger.js';
 import { safeReply } from './utils/interactions.js';
-import { checkAuthorization } from './middleware/auth.js';
-import { gracefulShutdown, doStart, doStop, doBounce } from './actions.js';
+import { checkAuthorization, checkAdminAuthorization } from './middleware/auth.js';
+import { gracefulShutdown, doStart, doStop, doBounce, doKill, doScheduledRestart } from './actions.js';
 import config from './config/index.js';
 
 const logger = createLogger('DiscordBot');
-const client = new Client({ intents: [GatewayIntentBits.Guilds], partials: [Partials.Channel] });
+// allowedMentions with an empty parse list makes every message the bot sends
+// mention-inert. /palannounce echoes operator-supplied text straight back into
+// the channel, so without this an "@everyone" in that text would ping the whole
+// guild using the BOT's permissions rather than the caller's.
+const client = new Client({
+  intents: [GatewayIntentBits.Guilds],
+  partials: [Partials.Channel],
+  allowedMentions: { parse: [] }
+});
 
 
 /**
@@ -153,8 +161,10 @@ client.once('ready', async () => {
     logger.error(`Slash command registration failed: ${sanitizeErrorMessage(err)}`);
   }
 
-  // Start background monitoring for auto-stop functionality
-  await startMonitoring(gracefulShutdown, client);
+  // Start background monitoring for auto-stop and scheduled-restart functionality.
+  // Both actions are injected rather than imported by monitor.js, which would
+  // close an import cycle with actions.js.
+  await startMonitoring(gracefulShutdown, client, doScheduledRestart);
 });
 
 client.on('interactionCreate', async (interaction) => {
@@ -241,9 +251,55 @@ client.on('interactionCreate', async (interaction) => {
             { name: '/palstart', value: 'Start the Palworld server', inline: false },
             { name: '/palstop', value: 'Gracefully stop server when 0 players', inline: false },
             { name: '/palbounce', value: 'Graceful stop, wait, then restart the server', inline: false },
+            { name: '/palannounce', value: 'Broadcast to in-game chat (admin)', inline: false },
+            { name: '/palsave', value: 'Force a world save (admin)', inline: false },
+            { name: '/palkill', value: 'Save the world, then stop the server even with players online, force-killing the process only if the clean shutdown fails (admin)', inline: false },
           )
           .setColor('#808080');
         return safeReply(interaction, { embeds: [embed] });
+      }
+
+      case 'palannounce': {
+        // Admin authorization check - requires the 'palserver-admin' role specifically
+        if (!checkAdminAuthorization(interaction)) return;
+        await interaction.deferReply();
+
+        // Early return if server is down - the announce API needs a live server
+        if (!(await requireServerUp(interaction))) return;
+
+        const message = interaction.options.getString('message', true);
+        await announce(message);
+        return safeEdit(interaction, `Announced in-game: "${message}"`);
+      }
+
+      case 'palsave': {
+        // Admin authorization check - requires the 'palserver-admin' role specifically
+        if (!checkAdminAuthorization(interaction)) return;
+        await interaction.deferReply();
+
+        // Early return if server is down - the save API needs a live server
+        if (!(await requireServerUp(interaction))) return;
+
+        await saveWorld();
+        return safeEdit(interaction, 'World save triggered.');
+      }
+
+      case 'palkill': {
+        // Admin authorization check - requires the 'palserver-admin' role specifically
+        if (!checkAdminAuthorization(interaction)) return;
+        await interaction.deferReply();
+
+        // Deliberately NO requireServerUp: this is the escape hatch and must work
+        // even when the REST API is unresponsive. It is no longer an unconditional
+        // hard kill - it saves and asks the server to shut down first (which works
+        // with players online) and only force-kills if that does not take.
+        //
+        // That polite path can take the save settle plus the stop timeout, well
+        // over a minute, so surface an intermediate line the same way /palbounce
+        // does rather than leaving the deferred reply silent.
+        await safeEdit(interaction, 'Saving and stopping the server — will force-kill if that does not take...');
+        const r = await doKill({ actor: interaction.user.username });
+        return safeEdit(interaction, r.message);
       }
 
     }

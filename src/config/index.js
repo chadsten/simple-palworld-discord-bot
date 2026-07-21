@@ -98,6 +98,7 @@ const config = {
     clientId: validateRequired('CLIENT_ID', process.env.CLIENT_ID),
     guildId: validateRequired('GUILD_ID', process.env.GUILD_ID),
     roleName: validateOptionalString(process.env.PALSERVER_ROLE_NAME) || 'palserver',
+    adminRoleName: validateOptionalString(process.env.PALSERVER_ADMIN_ROLE_NAME) || 'palserver-admin',
     announceChannelId: validateOptionalString(process.env.ANNOUNCE_CHANNEL_ID),
     hostActorName: validateOptionalString(process.env.HOST_ACTOR_NAME) || 'Host'
   },
@@ -134,14 +135,6 @@ const config = {
       60000  // Maximum 1 minute
     ),
     
-    // Delay after world save before final player check in milliseconds (default: 1.5 seconds)
-    saveWorldDelayMs: validatePositiveInteger(
-      'SAVE_WORLD_DELAY_MS',
-      process.env.SAVE_WORLD_DELAY_MS || '1500',
-      500,   // Minimum 0.5 seconds
-      10000  // Maximum 10 seconds
-    ),
-    
     // Grace period for server shutdown in seconds (default: 2 seconds)
     shutdownDelaySeconds: validatePositiveInteger(
       'SHUTDOWN_DELAY_SECONDS',
@@ -156,6 +149,28 @@ const config = {
       process.env.BOUNCE_DELAY_MS || '15000',
       1000,   // Minimum 1 second
       120000  // Maximum 2 minutes
+    ),
+
+    // How long to wait after a world save before shutting the server down, so the
+    // save is durably written to disk (default: 30 seconds). Nothing documents
+    // whether the REST /shutdown saves on its way out, so the bot always saves
+    // first and waits out this settle window before stopping. It doubles as the
+    // window in which a late-joining player can still abort a graceful stop.
+    saveSettleMs: validatePositiveInteger(
+      'SAVE_SETTLE_MS',
+      process.env.SAVE_SETTLE_MS || '30000',
+      0,      // Minimum 0 (no settle wait)
+      120000  // Maximum 2 minutes
+    ),
+
+    // How long to wait for the server to actually go down after a REST shutdown
+    // before escalating to a force kill (default: 45 seconds). Distinct from
+    // startTimeoutMs, which is a START budget and has nothing to do with stops.
+    stopTimeoutMs: validatePositiveInteger(
+      'STOP_TIMEOUT_MS',
+      process.env.STOP_TIMEOUT_MS || '45000',
+      10000,  // Minimum 10 seconds
+      300000  // Maximum 5 minutes
     )
   },
 
@@ -175,6 +190,24 @@ const config = {
       process.env.EMPTY_CHECK_THRESHOLD || '2',
       1,  // Minimum 1 check
       10  // Maximum 10 checks
+    )
+  },
+
+  // Scheduled Auto-Restart Configuration
+  // Opt-in. The monitor watches server uptime and, once it nears intervalHours,
+  // arms a countdown that warns in-game before saving, stopping and restarting.
+  autoRestart: {
+    // Master switch: off unless explicitly enabled, mirroring steam.updateOnStart.
+    enabled: validateBoolean('AUTO_RESTART_ENABLED', process.env.AUTO_RESTART_ENABLED, false),
+
+    // Hours of server uptime before an automatic restart (default: 6 hours).
+    intervalHours: validatePositiveInteger(
+      'RESTART_INTERVAL_HOURS',
+      process.env.RESTART_INTERVAL_HOURS || '6',
+      1,   // Minimum 1 hour: the baked-in warning schedule starts 30 minutes out,
+           // so a sub-hour interval could want to warn about the next restart
+           // before the previous one had even finished.
+      168  // Maximum 1 week
     )
   },
 

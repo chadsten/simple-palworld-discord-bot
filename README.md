@@ -8,7 +8,7 @@ This isn't a public bot you invite; it's code you run on the PC that hosts your 
 
 ## Commands
 
-All commands require the `palserver` Discord role.
+All commands require the `palserver` Discord role. Commands marked *(admin)* require the `palserver-admin` role instead (configurable via `PALSERVER_ADMIN_ROLE_NAME`); admins can also use all base commands.
 
 | Command | What it does |
 |---|---|
@@ -18,8 +18,23 @@ All commands require the `palserver` Discord role.
 | `/palstop` | Gracefully stop (only when 0 players online) |
 | `/palbounce` | Graceful stop, wait, then restart — a clean reboot |
 | `/palhelp` | List all commands |
+| `/palannounce` | Broadcast a message to in-game chat *(admin)* |
+| `/palsave` | Force a world save *(admin)* |
+| `/palkill` | Stop the server even with players online — saves and shuts down cleanly, force-kills only if that fails *(admin)* |
 
 It also **auto-stops** the server after it's been empty for a while, and shows live server status as the bot's Discord presence.
+
+### How stopping works
+
+`/palstop` and `/palbounce` are polite: they refuse while anyone is online, save the world, wait `SAVE_SETTLE_MS` for that save to land on disk, and only then shut the server down. If someone joins during that settle window the stop aborts.
+
+`/palkill` is the override. It never refuses — it works with players connected — but it is not a blind kill either: it saves and asks the server to shut down first, waits up to `STOP_TIMEOUT_MS` for it to actually exit, and only force-kills if that doesn't take (or if the server's REST API is already wedged, in which case it kills immediately). "Actually exited" means the REST API has gone quiet *and* no server process is left running.
+
+> Force-killing works by image name, so **`START_CMD` must point at `PalServer-Win64-Shipping.exe`**, not the top-level `PalServer.exe` launcher — killing the launcher would leave the real server running. The bot refuses that configuration rather than pretending the kill worked.
+
+### Scheduled auto-restart *(optional, off by default)*
+
+Set `AUTO_RESTART_ENABLED=true` in your `.env` and the bot reboots the server every `RESTART_INTERVAL_HOURS` of uptime (default 6, minimum 1). It warns in-game at **30, 20, 10, 5, 3, 2 and 1 minutes** before the restart, then saves the world and shuts the server down cleanly — with players online if need be — force-killing it only if the clean shutdown doesn't take. The warning schedule is fixed. A restart that fails isn't retried until a full interval has passed.
 
 ---
 
@@ -45,9 +60,9 @@ That's it. To update, download a newer exe and replace the old one — your `.en
 
 > If the window flashes and closes, you're missing a `.env` next to the exe. The bot now prints a clear message telling you so.
 
-Your server path goes in `.env` like this:
+Your server path goes in `.env` like this — point it at the **Shipping** binary, not `PalServer.exe` (see [How stopping works](#how-stopping-works)), and wrap the whole value in single quotes:
 ```
-START_CMD="C:\Program Files (x86)\Steam\steamapps\common\PalServer\PalServer.exe" -EpicApp=PalServer -USEALLAVAILABLECORES -NoAsyncLoadingThread
+START_CMD='"C:\Program Files (x86)\Steam\steamapps\common\PalServer\Pal\Binaries\Win64\PalServer-Win64-Shipping.exe" -USEALLAVAILABLECORES -NoAsyncLoadingThread'
 START_CWD=C:\Program Files (x86)\Steam\steamapps\common\PalServer
 ```
 
