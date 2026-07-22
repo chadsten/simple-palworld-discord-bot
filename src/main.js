@@ -27,6 +27,7 @@ import dotenv from 'dotenv';
 import { healEnv } from './env-heal.js';
 import { createLogger } from './utils/logger.js';
 import { getBaseDir } from './utils/paths.js';
+import { acquireSingleInstanceLock } from './singleton.js';
 
 /**
  * Pops a native Windows message box so a windowless (GUI-subsystem) exe can
@@ -182,46 +183,67 @@ process.on('uncaughtException', handleFatal);
 // Seed a starter .env on first run. When this handles a first run it schedules
 // a clean exit, so we must not fall through to loading the (unconfigured) app.
 if (!bootstrapFirstRun()) {
-  // A real .env exists - restore any keys this build knows about that the user's
-  // .env is missing, appending them (with comments and example defaults) from the
-  // bundled template. Best-effort: a heal failure must never block boot. Runs
-  // before the dotenv load below so it picks up the restored values.
-  try {
-    const { healed } = healEnv(
-      path.join(getBaseDir(), '.env'),
-      fileURLToPath(new URL('../.env.example', import.meta.url))
-    );
-    if (healed.length > 0) {
-      createLogger('EnvHeal').info(
-        `Added ${healed.length} missing key(s) to .env from .env.example: ${healed.join(', ')}`
-      );
-    }
-  } catch { /* self-heal is best-effort; never let it block startup */ }
-
-  // Load the .env from the launch folder explicitly, BEFORE the dynamic import of
-  // ./index.js below pulls in config/index.js and validates the environment. The
-  // default dotenv path is process.cwd() - the wrong folder when the bot is
-  // started by Task Scheduler or a shortcut with no "Start in" - so config must
-  // not be allowed to load until this explicit, base-dir load has run. Nothing
-  // main.js imports statically pulls in config/index.js, which keeps that order.
-  dotenv.config({ path: path.join(getBaseDir(), '.env') });
-
-  try {
-    // Dynamic import defers config loading into this try block so an import-time
-    // throw from src/config/index.js is caught rather than crashing the process.
-    const { client } = await import('./index.js');
-
-    // Start the system tray only after the bot has booted, and never let a tray
-    // failure take the bot down - it keeps running headless if the tray can't
-    // start. The tray receives the live client so "Quit" can destroy it cleanly.
+  // Refuse to start a second bot for the SAME install - two would double every
+  // Discord reply and announcement and race the shared server-operation lock
+  // across processes. The guard runs BEFORE healEnv/dotenv/the app import below
+  // so a rejected second instance never mutates the .env or connects to Discord.
+  // The handoff flag is set by the tray "Restart Bot" spawn: it grants an 8s
+  // retry window so the replacement instance simply waits out the ~300ms teardown
+  // of the outgoing one instead of colliding with the pipe it still holds.
+  const handoff = process.env.PALBOT_SINGLETON_HANDOFF === '1';
+  delete process.env.PALBOT_SINGLETON_HANDOFF; // consume it; don't leak to children
+  // Held for the process lifetime: the OS releases this pipe (and the lock) when
+  // the process exits, so `lock` must stay in scope and never be reassigned.
+  const lock = await acquireSingleInstanceLock({ retryMs: handoff ? 8000 : 0 });
+  if (!lock.acquired) {
+    const msg = "Exo's Palworld Bot is already running. Use its system-tray icon; close that instance before starting another copy.";
+    // Under the windowless exe stderr is a black hole, so surface a native dialog;
+    // from a terminal the stderr line is visible and sufficient.
+    if (!process.stdout.isTTY) showDialog('Palworld Discord Bot - already running', msg);
+    else process.stderr.write(`\n  ${msg}\n`);
+    pauseIfInteractive(0);
+  } else {
+    // A real .env exists - restore any keys this build knows about that the user's
+    // .env is missing, appending them (with comments and example defaults) from the
+    // bundled template. Best-effort: a heal failure must never block boot. Runs
+    // before the dotenv load below so it picks up the restored values.
     try {
-      const { startTray } = await import('./tray.js');
-      await startTray(client);
-    } catch (trayErr) {
-      // handleFatal would exit the process; the tray is non-essential, so just log.
-      process.stderr.write(`\n  System tray unavailable: ${trayErr instanceof Error ? trayErr.message : String(trayErr)}\n`);
+      const { healed } = healEnv(
+        path.join(getBaseDir(), '.env'),
+        fileURLToPath(new URL('../.env.example', import.meta.url))
+      );
+      if (healed.length > 0) {
+        createLogger('EnvHeal').info(
+          `Added ${healed.length} missing key(s) to .env from .env.example: ${healed.join(', ')}`
+        );
+      }
+    } catch { /* self-heal is best-effort; never let it block startup */ }
+
+    // Load the .env from the launch folder explicitly, BEFORE the dynamic import of
+    // ./index.js below pulls in config/index.js and validates the environment. The
+    // default dotenv path is process.cwd() - the wrong folder when the bot is
+    // started by Task Scheduler or a shortcut with no "Start in" - so config must
+    // not be allowed to load until this explicit, base-dir load has run. Nothing
+    // main.js imports statically pulls in config/index.js, which keeps that order.
+    dotenv.config({ path: path.join(getBaseDir(), '.env') });
+
+    try {
+      // Dynamic import defers config loading into this try block so an import-time
+      // throw from src/config/index.js is caught rather than crashing the process.
+      const { client } = await import('./index.js');
+
+      // Start the system tray only after the bot has booted, and never let a tray
+      // failure take the bot down - it keeps running headless if the tray can't
+      // start. The tray receives the live client so "Quit" can destroy it cleanly.
+      try {
+        const { startTray } = await import('./tray.js');
+        await startTray(client);
+      } catch (trayErr) {
+        // handleFatal would exit the process; the tray is non-essential, so just log.
+        process.stderr.write(`\n  System tray unavailable: ${trayErr instanceof Error ? trayErr.message : String(trayErr)}\n`);
+      }
+    } catch (err) {
+      handleFatal(err);
     }
-  } catch (err) {
-    handleFatal(err);
   }
 }

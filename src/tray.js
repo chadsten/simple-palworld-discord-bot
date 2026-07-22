@@ -87,7 +87,11 @@ function restartBot(tray) {
     spawn(process.execPath, process.argv.slice(1), {
       detached: true,
       stdio: 'ignore',
-      cwd: process.cwd()
+      cwd: process.cwd(),
+      // Signal the replacement instance to use the single-instance retry window so
+      // it waits out this instance's ~TRAY_TEARDOWN_MS exit (which releases the
+      // pipe) instead of seeing EADDRINUSE and refusing to start.
+      env: { ...process.env, PALBOT_SINGLETON_HANDOFF: '1' }
     }).unref();
   } catch (error) {
     logger.error(`Restart failed to spawn a new instance: ${sanitizeErrorMessage(error)}`);
